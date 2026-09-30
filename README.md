@@ -117,7 +117,9 @@ State 흐름: `query` → `candidates`(Top-3) → `current_candidate` → `evalu
 
 - 입력: 현재 후보의 분석 결과 6개 (`technology`, `market`, `competition`, `team`, `traction`, `deal_terms`)
 - Scorecard 비중: 제품/기술력 35% · 경쟁 우위 25% · 시장성 15% · 창업자 10% · 실적 10% · 투자조건 5%
-- 가중합을 0~100점으로 환산해 70점 이상이면 INVEST, 미만이면 HOLD
+- 판정 점수(핵심 점수): 필수 5항목(기술력·경쟁 우위·시장성·창업자·실적)의 가중합을 비중 합 95%로 나눠 100점으로 환산. 투자조건은 웹 조사로 확인이 어려워 참고용으로만 표시하고 총점에서 제외
+- 하한값 59.3점: 상장에 성공한 기준 기업 3곳(싸이닉솔루션 57.9 · 그린리소스 60.0 · Ambiq 60.0)을 같은 방식으로 채점한 점수의 평균. 총점이 이 값을 넘으면 INVEST, 아니면 HOLD
+- 필수 항목이 하나라도 미산정이면 총점 없이 근거 부족 HOLD (0점·기본점수로 채우지 않음). 총점이 하한값 ±5점 이내면 채점을 2회 더 해 항목별 중앙값 사용
 - INVEST면 `selected_candidate`에 기업 ID를 기록하고 보고서 생성으로 이동
 - HOLD이고 후보가 남으면 다음 후보로 반복, 후보가 소진되면 보고서 생성으로 이동
 
@@ -142,6 +144,7 @@ VentureSignal/
 │   ├── founder_traction/     # 창업자 및 실적 (웹)
 │   ├── investment_decision/  # 투자 판단 (LLM, scoring.py)
 │   └── report_writer/        # 보고서 생성 (LLM, template.md)
+├── prompts/                  # 에이전트별 LLM 프롬프트 (<에이전트>.py)
 ├── core/                     # 공용 State·LLM·설정
 ├── graph/                    # LangGraph 조립 (builder.py)
 ├── rag/                      # PDF 파싱·임베딩·Qdrant·검색
