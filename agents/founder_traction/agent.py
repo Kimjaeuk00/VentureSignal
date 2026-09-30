@@ -235,7 +235,13 @@ class FounderPerformanceAgent:
         for result in output.values():
             result["details"].update(agent_version=VERSION, as_of=context["as_of"])
         LOG.info("founder_traction v%s complete", VERSION)
-        return evaluation_update(cid, **output)
+        update = evaluation_update(cid, **output)
+        # 출처 제목을 State 의 sources 에도 남겨 다른 분석과 같은 방식으로 보고서 REFERENCE 가 읽게 한다.
+        update["sources"] = {
+            src["url"]: {"title": src["title"], "retrieved_at": context["as_of"]}
+            for result in output.values() for src in result["details"].get("sources", [])
+            if src.get("url") and src.get("title") and src["title"] != src["url"]}
+        return update
 
 
 def run(state: GraphState) -> dict:

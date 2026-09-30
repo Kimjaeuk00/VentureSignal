@@ -22,8 +22,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from core.config import LLM_MODEL, LLM_PROVIDER
+from core.sources import SourceBook
 from core.state import GraphState, evaluation_update, make_analysis
-from tools.web_search import WebResult, web_search
+from tools.web_search import web_search
 
 
 class PeerProduct(BaseModel):
@@ -62,7 +63,7 @@ COMPETITION_INSTRUCTIONS = """\
 summary: 검색 근거를 바탕으로 분석 대상 기업과 경쟁사 제품을 비교한 핵심 결론을 요약하세요.
 strengths: 경쟁사 제품과 비교했을 때 분석 대상 기업의 확인된 강점을 적으세요.
 risks: 경쟁사 제품 때문에 분석 대상 기업이 직면하는 경쟁 위험과 불확실성을 적으세요.
-evidence: 분석에 실제로 사용한 검색 결과의 URL만 문자열 목록으로 적으세요.
+evidence: 분석에 실제로 사용한 검색 결과의 출처 번호(U1, U2 …)만 문자열 목록으로 적으세요. URL은 쓰지 마세요.
 details.peer_products: 경쟁사별 제품, 용도, 성능·전력, 가격·도입, 장단점과 출처를 적으세요.
 details.comparison_conditions: 공정한 비교에 필요한 제품 세대, 용량, 측정 조건을 적으세요.
 details.missing_information: 근거가 없어 확인하지 못한 정보를 적으세요.
@@ -70,25 +71,64 @@ details.critical_risks: 분석 결론에 큰 영향을 주는 핵심 경쟁 위�
 
 먼저 검색 도구로 근거를 확보하세요. 검색은 최대 3회 가능합니다.
 분석 대상 기업은 peer_products에서 제외하고 경쟁사 제품만 넣으세요.
-evidence와 source_url에는 검색 도구가 반환한 URL만 넣으세요.
+검색 결과는 [U1], [U2] …처럼 번호가 붙어 돌아옵니다. evidence와 source_url에는 그 번호만 넣고(예: "U3"),
+본문에서 근거를 밝힐 때도 [U3]처럼 번호만 쓰세요. URL이나 도구가 알려 주지 않은 번호는 쓰지 마세요.
 결과는 반드시 submit_competition_result 도구로 제출하세요.
 검증에 실패하면 오류에 맞춰 재검색하거나 결과를 수정한 뒤 다시 제출하세요.
 summary에는 기업 비교 결론만 쓰고 검증 과정이나 도구 오류를 언급하지 마세요.
 """
 
 
-def _validate_result(result: dict, sources: list[WebResult]) -> None:
-    source_urls = {item["url"] for item in sources if item.get("url")}
-    for url in result["evidence"]:
-        if url not in source_urls:
-            raise ValueError(f"검색 출처로 확인되지 않은 근거입니다: {url}")
+MAX_SUBMIT_FAILURES = 2  # 검증에 실패한 제출을 돌려보내 다시 쓰게 하는 최대 횟수. 그 뒤에는 잘못된 출처만 빼고 받아들인다
 
-    for peer in result["details"]["peer_products"]:
-        if peer["source_url"] not in source_urls:
-            raise ValueError(f"검색 출처로 확인되지 않은 경쟁 제품입니다: {peer['source_url']}")
 
-    if (result["strengths"] or result["details"]["peer_products"]) and not result["evidence"]:
-        raise ValueError("경쟁 우위나 경쟁 제품을 제시하려면 근거가 필요합니다.")
+def _check(result: dict, book: SourceBook) -> str:
+    """제출 결과의 문제를 한 줄로. 없으면 빈 문자열."""
+    problems = []
+    cited = [*result["evidence"], *(peer["source_url"] for peer in result["details"]["peer_products"] if peer["source_url"])]
+    known = set(book.resolve(cited))
+    unknown = [ref for ref in cited if ref.strip() and not book.resolve([ref])]
+    book.unknown.clear()  # 검사용 호출이 남긴 기록은 지운다 (최종 변환에서 다시 기록)
+    if unknown:
+        problems.append(f"검색 결과에 없는 출처 번호입니다: {', '.join(dict.fromkeys(unknown))}")
+    if (result["strengths"] or result["details"]["peer_products"]) and not known:
+        problems.append("경쟁 우위나 경쟁 제품을 제시하려면 근거가 필요합니다")
+    return "; ".join(problems)
+
+
+def _finalize(result: dict, book: SourceBook, problems: str) -> dict:
+    """LLM 이 쓴 출처 번호를 표준 URL 로 바꾼다(본문 인용 포함). 검색 결과에 없는 출처는 뺀다."""
+    book.unknown.clear()
+    text = book.restore
+    details = result["details"]
+    for peer in details["peer_products"]:
+        for key in ("company_name", "product_name", "customer_and_use", "performance_and_power",
+                    "price_and_adoption", "strengths_and_weaknesses"):
+            peer[key] = text(peer[key])
+        urls = book.resolve([peer["source_url"]]) if peer["source_url"] else []
+        peer["source_url"] = urls[0] if urls else ""
+    for key in ("comparison_conditions", "missing_information", "critical_risks"):
+        details[key] = [text(item) for item in details[key]]
+    result["summary"] = text(result["summary"])
+    result["strengths"] = [text(item) for item in result["strengths"]]
+    result["risks"] = [text(item) for item in result["risks"]]
+    result["evidence"] = book.resolve(result["evidence"])
+    for peer in details["peer_products"]:  # 표에 쓴 출처는 근거에도 있어야 보고서 REFERENCE 로 이어진다
+        if peer["source_url"] and peer["source_url"] not in result["evidence"]:
+            result["evidence"].append(peer["source_url"])
+    if book.unknown or problems:
+        removed = len(book.unknown)
+        details["missing_information"].append(
+            f"제공되지 않은 출처 표기 {removed}건을 제거했다. 해당 근거는 확인이 필요하다." if removed else f"출처 검증 문제가 남았다: {problems}")
+    return result
+
+
+def _insufficient(cid: str, reason: str) -> dict:
+    """검증을 통과한 결과를 끝내 내지 못한 경우 — 그래프를 멈추지 않고 근거 부족으로 넘긴다."""
+    return evaluation_update(cid, competition=make_analysis(
+        summary=f"경쟁사 비교를 완료하지 못했다: {reason}",
+        details={"status": "insufficient_evidence", "reason": reason, "missing_information": [f"경쟁사 비교 전체: {reason}"]},
+    ))
 
 
 def run(state: GraphState) -> dict:
@@ -103,8 +143,9 @@ def run(state: GraphState) -> dict:
     if company is None:
         raise ValueError(f"후보 목록에서 {cid}를 찾지 못했습니다.")
 
-    sources: list[WebResult] = []
+    book = SourceBook(canonicalize=True)  # 검색 결과 ↔ 출처 번호(U1…) — LLM 은 URL 을 쓰지 않는다
     search_calls = 0
+    submit_failures = 0
     accepted_result: dict | None = None
 
     @tool
@@ -118,19 +159,22 @@ def run(state: GraphState) -> dict:
             found = web_search(query, max_results=5)
         except Exception as exc:
             return f"검색 연결 오류 ({type(exc).__name__}). 다른 검색어로 다시 시도하세요."
-        sources.extend(found)
-        return json.dumps(found, ensure_ascii=False)
+        shown = book.add(found)
+        if not shown:
+            return "검색 결과가 없습니다. 다른 검색어로 다시 시도하세요."
+        return "\n\n".join(book.render(item) for item in shown)
 
     @tool
     def submit_competition_result(result: CompetitionResult) -> str:
         """경쟁 제품 비교 결과를 제출하고 검색 출처를 검증한다."""
-        nonlocal accepted_result
+        nonlocal accepted_result, submit_failures
         candidate_result = CompetitionResult.model_validate(result).model_dump()
-        try:
-            _validate_result(candidate_result, sources)
-        except ValueError as exc:
-            return f"검증 실패: {exc}. 검색 출처를 확인하고 결과를 수정해 다시 제출하세요. 이 과정은 summary에 쓰지 마세요."
-        accepted_result = candidate_result
+        problems = _check(candidate_result, book)
+        if problems and submit_failures < MAX_SUBMIT_FAILURES:
+            submit_failures += 1
+            labels = ", ".join(item.label for item in book.sources) or "없음(먼저 검색하세요)"
+            return f"검증 실패: {problems}. 사용할 수 있는 출처 번호: {labels}. 결과를 수정해 다시 제출하세요. 이 과정은 summary에 쓰지 마세요."
+        accepted_result = _finalize(candidate_result, book, problems)
         return "검증 통과. 분석이 완료되었습니다."
 
     model = init_chat_model(
@@ -155,9 +199,11 @@ def run(state: GraphState) -> dict:
     )
 
     if accepted_result is None:
-        raise RuntimeError("에이전트가 검증을 통과한 분석 결과를 제출하지 않았습니다.")
+        return _insufficient(cid, "에이전트가 분석 결과를 제출하지 않았다")
 
-    return evaluation_update(cid, competition=make_analysis(**accepted_result))
+    update = evaluation_update(cid, competition=make_analysis(**accepted_result))
+    update["sources"] = book.registry(used=accepted_result["evidence"])  # 출처 제목 (보고서 REFERENCE 용)
+    return update
 
 
 """테스트용 데이터 1"""

@@ -1,4 +1,4 @@
-from typing import TypedDict, Optional, Annotated, Literal, Any
+from typing import TypedDict, Optional, Annotated, Literal, Any, NotRequired
 
 # =========================
 # 0. evaluations 병합 함수
@@ -19,6 +19,29 @@ def merge_evaluations(
 
         else:
             result[company_id] = {**result[company_id], **new_evaluation}
+
+    return result
+
+
+# =========================
+# 0-1. sources 병합 함수
+# 웹 출처(URL)의 메타데이터. 같은 URL 은 같은 페이지라 값이 같으므로 비어 있지 않은 값을 살려 합친다.
+# =========================
+
+
+class SourceInfo(TypedDict, total=False):
+    title: str
+    retrieved_at: str
+
+
+def merge_sources(old: dict[str, "SourceInfo"], new: dict[str, "SourceInfo"]) -> dict[str, "SourceInfo"]:
+    result = {url: dict(info) for url, info in old.items()}
+
+    for url, info in new.items():
+        merged = result.setdefault(url, {})
+        for key, value in info.items():
+            if value or key not in merged:
+                merged[key] = value
 
     return result
 
@@ -66,13 +89,16 @@ class AnalysisResult(TypedDict):
 
 
 class ScorecardResult(TypedDict):
-    team: float
-    market: float
-    technology: float
-    competition: float
-    traction: float
-    deal_terms: float
+    # 미산정 항목은 None: 0점이나 기본점수로 채우지 않고 제외한 뒤 채점된 항목의 비중으로 total_score 를 환산한다
+    team: Optional[float]
+    market: Optional[float]
+    technology: Optional[float]
+    competition: Optional[float]
+    traction: Optional[float]
+    deal_terms: Optional[float]
     total_score: float
+    coverage: NotRequired[float]  # 채점된 항목의 비중 합 (1.0 이면 여섯 항목 모두 채점)
+    unscored: NotRequired[list[str]]  # 미산정 항목
 
 
 # =========================
@@ -121,6 +147,10 @@ class GraphState(TypedDict):
     # key = company_id
     evaluations: Annotated[dict[str, CandidateEvaluation], merge_evaluations]
 
+    # 웹 출처 메타데이터 {표준 URL: {title, retrieved_at}}
+    # 분석 Agent 가 evidence 에 남긴 URL 의 제목을 모아 보고서 REFERENCE 가 쓴다 (없어도 동작한다)
+    sources: Annotated[dict[str, SourceInfo], merge_sources]
+
     # 최종 투자 후보
     selected_candidate: Optional[str]
 
@@ -140,6 +170,7 @@ def initial_state(query: str) -> GraphState:
         "candidate_index": 0,
         "current_candidate": None,
         "evaluations": {},
+        "sources": {},
         "selected_candidate": None,
         "report": None,
     }

@@ -22,6 +22,7 @@ from agents.tech_summary.schemas import TechSummaryOutput
 from core.llm import get_llm
 from core.state import GraphState, evaluation_update, make_analysis
 from rag.retriever import get_company_pages, search
+from core.sources import SourceBook
 from tools.web_search import web_search
 
 TECH_TOPIC_TOP_K = 3
@@ -68,8 +69,11 @@ def run(state: GraphState) -> dict:
         ]
     )
 
+    # 웹 검색 결과는 LLM 에게 URL 대신 출처 번호(U1…)로 보여 준다. LLM 이 URL 을 베끼다 틀리는 사고를 없앤다.
+    book = SourceBook(canonicalize=True, rag_ids={sid for p in pages for sid in p["source_ids"]})
+
     # 2차: 정해진 검색어로 웹서치해 미확인 항목 보강. 결과가 없거나 실패하면 1차 요약을 그대로 쓴다.
-    web_results, web_log = _web_search(company_name, out.product)
+    web_results, web_log = _web_search(company_name, out.product, book)
     if web_results:
         out = llm.invoke(
             [
@@ -86,19 +90,22 @@ def run(state: GraphState) -> dict:
                 ),
             ]
         )
+        _restore_sources(out, book)  # 출처 번호(U1…) → 표준 URL. 없는 번호는 뺀다.
 
     # LLM 이 지어낸 출처를 막는다: 실제로 가져온 페이지의 source_id 와 웹 결과 URL 만 남긴다.
-    allowed = {sid for p in pages for sid in p["source_ids"]} | {r["url"] for r in web_results}
+    allowed = {sid for p in pages for sid in p["source_ids"]} | book.urls()
 
     def keep(ids: list[str]) -> list[str]:
         return [sid for sid in dict.fromkeys(ids) if sid in allowed]
 
     # 코드가 버린 내용도 unverified 에 남겨, 무엇이 빠졌는지 다음 노드가 알 수 있게 한다.
     unverified = list(out.unverified)
+    if book.unknown:
+        unverified.append(f"제공되지 않은 출처 표기 {len(book.unknown)}건을 제거함 — 해당 근거는 확인 필요")
 
     # 웹 수치는 인용한 검색 결과 본문에 그 값이 실제로 있어야 인정한다.
     # LLM 은 검색 결과의 본문만 보므로, 본문에 없는 값은 그 출처에서 나온 것이 아니다.
-    web_numbers = {r["url"]: _numbers(f"{r['title']} {r['content']}") for r in web_results}
+    web_numbers = {r.url: _numbers(f"{r.title} {r.content}") for r in web_results}
 
     performance = []
     for item in out.performance:
@@ -130,7 +137,7 @@ def run(state: GraphState) -> dict:
     if not evidence:
         return _insufficient(cid, "요약에 확인 가능한 출처가 없음")
 
-    return evaluation_update(
+    update = evaluation_update(
         cid,
         technology=make_analysis(
             summary=out.summary,
@@ -148,9 +155,11 @@ def run(state: GraphState) -> dict:
             },
         ),
     )
+    update["sources"] = book.registry(used=evidence)  # 웹 출처 제목 (보고서 REFERENCE 용)
+    return update
 
 
-def _web_search(company_name: str, product: str) -> tuple[list[dict], dict]:
+def _web_search(company_name: str, product: str, book: SourceBook) -> tuple[list, dict]:
     """정해진 검색어로 웹서치. 웹은 보강용이라 실패해도 예외를 올리지 않고 이유를 기록한다."""
     product = _clean_product(product)
     target = company_name if product in ("", "미확인") else f"{company_name} {product}"
@@ -160,8 +169,8 @@ def _web_search(company_name: str, product: str) -> tuple[list[dict], dict]:
         found = [r for q in queries for r in web_search(q, max_results=WEB_MAX_RESULTS)]
     except Exception as e:  # 키 없음·네트워크 오류 등
         return [], {"status": "skipped", "reason": f"{type(e).__name__}: {e}", **log}
-    results = list({r["url"]: r for r in found if r.get("url")}.values())  # URL 기준 중복 제거
-    return results, {"status": "ok" if results else "no_results", **log, "urls": [r["url"] for r in results]}
+    results = book.add(found)  # 같은 페이지는 한 번만, 표준 URL 과 출처 번호(U1…)를 붙인다
+    return results, {"status": "ok" if results else "no_results", **log, "urls": [r.url for r in results]}
 
 
 def _clean_product(product: str) -> str:
@@ -174,8 +183,24 @@ def _numbers(text: str) -> set[str]:
     return set(NUMBER_RE.findall(THOUSANDS_RE.sub("", text)))
 
 
-def _format_web(results: list[dict]) -> str:
-    return "\n\n".join(f"[웹 | {r['title']} | 출처: {r['url']}]\n{r['content']}" for r in results)
+def _format_web(results: list) -> str:
+    return "\n\n".join(f"[웹 | {r.title} | 출처: {r.label}]\n{r.content}" for r in results)
+
+
+def _restore_sources(out: TechSummaryOutput, book: SourceBook) -> None:
+    """LLM 이 쓴 웹 출처 번호를 표준 URL 로 되돌린다(본문 인용 포함). 제공되지 않은 번호·URL 은 뺀다."""
+    out.evidence = book.resolve(out.evidence)
+    out.summary = book.restore(out.summary)
+    out.strengths = [book.restore(t) for t in out.strengths]
+    out.risks = [book.restore(t) for t in out.risks]
+    out.unverified = [book.restore(t) for t in out.unverified]
+    for name in FINDING_LABELS:
+        finding = getattr(out, name)
+        finding.content = book.restore(finding.content)
+        finding.source_ids = book.resolve(finding.source_ids)
+    for item in out.performance:
+        item.condition = book.restore(item.condition)
+        item.source_ids = book.resolve(item.source_ids)
 
 
 def _format_context(pages: list[dict]) -> str:

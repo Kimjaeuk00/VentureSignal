@@ -19,6 +19,7 @@ import os
 import re
 
 from core.llm import get_llm
+from core.sources import SourceBook
 from core.state import GraphState, evaluation_update, make_analysis
 from rag.retriever import get_company_pages, search
 from tools.web_search import web_search
@@ -140,26 +141,54 @@ def _strip_unknown_sources(
     return removed
 
 
+def _restore_sources(result: MarketAnalysis, book: SourceBook) -> None:
+    """LLM 이 쓴 웹 출처 번호(U1…)를 표준 URL 로 되돌린다. 제공되지 않은 번호·URL 은 근거와 본문에서 뺀다."""
+    details = result.details
+    result.evidence = book.resolve(result.evidence)
+    result.summary = book.restore(result.summary)
+    result.strengths = [book.restore(t) for t in result.strengths]
+    result.risks = [book.restore(t) for t in result.risks]
+    details.target_customers = [book.restore(t) for t in details.target_customers]
+    details.market_size = book.restore(details.market_size)
+    details.growth_drivers = [book.restore(t) for t in details.growth_drivers]
+    details.business_model = book.restore(details.business_model)
+    details.adoption_barriers = [book.restore(t) for t in details.adoption_barriers]
+    details.missing_information = [book.restore(t) for t in details.missing_information]
+
+
 def _analyze_checked(
     model,
     inputs: dict,
     stage: str,
     web_context: dict,
     allowed_sources: set[str],
+    book: SourceBook,
 ) -> MarketAnalysis:
     """분석하고 출처를 검증한다.
 
-    허용되지 않은 출처가 있으면 오류를 알려 주고 다시 요청한다.
+    웹 출처는 LLM 이 번호(U1…)로 쓰고 여기서 URL 로 되돌린다(LLM 이 URL 을 베끼다 틀리는 사고를 없앤다).
+    허용되지 않은 출처가 남으면 오류를 알려 주고 다시 요청한다.
     그래도 남으면 그 출처만 제거하고 미확인 사항에 기록한다.
     한 후보의 출처 오류로 그래프 전체가 멈추지 않게 한다.
     """
+    allowed_sources = allowed_sources | book.urls()
     context = web_context
     last_error: ValueError | None = None
+    dropped: list[str] = []
 
     for _ in range(MAX_EVIDENCE_RETRIES + 1):
+        before = len(book.unknown)
         result = _analyze(model, inputs, stage, context)
+        _restore_sources(result, book)
+        dropped = book.unknown[before:]  # 이번 응답에서 목록에 없어 뺀 출처 표기
 
         try:
+            if dropped:
+                raise ValueError(
+                    "제공되지 않은 출처 표기가 있습니다: "
+                    f"{', '.join(dict.fromkeys(dropped))}"
+                )
+
             _validate_evidence(result, allowed_sources)
             return result
         except ValueError as exc:
@@ -167,12 +196,12 @@ def _analyze_checked(
             context = {
                 **web_context,
                 "previous_error": (
-                    f"{exc} 제공된 출처 ID와 URL만 인용하고 "
+                    f"{exc} 제공된 출처 ID(S006)와 웹 label(U1 …)만 인용하고 "
                     "evidence에도 그 값만 넣는다."
                 ),
             }
 
-    removed = _strip_unknown_sources(result, allowed_sources)
+    removed = _strip_unknown_sources(result, allowed_sources) + len(dropped)
 
     try:
         _validate_evidence(result, allowed_sources)
@@ -342,6 +371,8 @@ def run(state: GraphState) -> dict:
     # 이 호출에서 분석 결과와 필요한 웹 검색 계획을 함께 받는다.
     model = get_llm().with_structured_output(MarketAnalysis)
 
+    book = SourceBook(canonicalize=True, rag_ids=set(allowed_sources))  # 웹 검색 결과 ↔ label(U1…)
+
     initial = _analyze_checked(
         model=model,
         inputs=inputs,
@@ -350,6 +381,7 @@ def run(state: GraphState) -> dict:
             "status": "아직 웹 검색을 실행하지 않음",
         },
         allowed_sources=allowed_sources,
+        book=book,
     )
 
     # 미확인 사항의 빈 문자열과 중복 제거
@@ -393,7 +425,6 @@ def run(state: GraphState) -> dict:
 
     final = initial
     search_log = []
-    web_by_url = {}
 
     # 5. 검색 계획이 있을 때만 웹 검색
     if search_plans:
@@ -433,6 +464,9 @@ def run(state: GraphState) -> dict:
                 and item.get("content", "").strip()
             ]
 
+            # 같은 페이지의 자료는 한 번만 등록하고 label(U1…)을 붙인다.
+            shown = book.add(usable_results)
+
             # success는 자료 반환 성공이며 사실 검증 완료가 아니다.
             search_log.append({
                 "purpose": plan.purpose,
@@ -440,18 +474,17 @@ def run(state: GraphState) -> dict:
                 "status": (
                     "success" if usable_results else "no_results"
                 ),
-                "urls": [
-                    item["url"] for item in usable_results
-                ],
+                "urls": [source.url for source in shown],
             })
 
-            # 동일 URL의 자료는 한 번만 전달한다.
-            for item in usable_results:
-                web_by_url.setdefault(item["url"], item)
-
         # 6. 웹 자료가 확보되면 RAG와 함께 최종 분석
-        if web_by_url:
-            allowed_sources.update(web_by_url.keys())
+        if book.sources:
+            # LLM 에게는 URL 대신 label 을 보여 준다.
+            prompt_log = [
+                {**entry, "urls": [book.label_of(url) for url in entry["urls"]]}
+                if "urls" in entry else entry
+                for entry in search_log
+            ]
 
             final = _analyze_checked(
                 model=model,
@@ -463,8 +496,11 @@ def run(state: GraphState) -> dict:
                         plan.model_dump()
                         for plan in search_plans
                     ],
-                    "search_log": search_log,
-                    "results": list(web_by_url.values()),
+                    "search_log": prompt_log,
+                    "results": [
+                        {"label": source.label, "title": source.title, "content": source.content}
+                        for source in book.sources
+                    ],
                     "note": (
                         "검색 결과에 제공된 내용만 사용한다. "
                         "검색 성공은 정보 확인 완료를 뜻하지 않는다. "
@@ -475,6 +511,7 @@ def run(state: GraphState) -> dict:
                     ),
                 },
                 allowed_sources=allowed_sources,
+                book=book,
             )
 
         else:
@@ -498,8 +535,10 @@ def run(state: GraphState) -> dict:
     ]
     data["details"]["web_search_log"] = search_log
 
-    # 현재 기업의 market 필드만 반환한다.
-    return evaluation_update(
+    # 현재 기업의 market 필드만 반환한다. 웹 출처의 제목은 sources 로 함께 남긴다(보고서 REFERENCE 용).
+    update = evaluation_update(
         cid,
         market=make_analysis(**data),
     )
+    update["sources"] = book.registry(used=data["evidence"])
+    return update
