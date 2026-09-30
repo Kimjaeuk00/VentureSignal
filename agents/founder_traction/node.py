@@ -8,15 +8,10 @@
 - 미확인 재무 항목은 추정하지 말고 "미확인"으로 남긴다. 점수는 매기지 않는다.
 """
 
-from core.state import GraphState, evaluation_update, make_analysis
+from core.state import GraphState
+
+from .agent import run as run_founder_traction
 
 
 def run(state: GraphState) -> dict:
-    cid = state["current_candidate"]
-    # TODO: 구현
-    return evaluation_update(
-        cid,
-        team=make_analysis(summary="TODO: 창업자"),
-        traction=make_analysis(summary="TODO: 실적"),
-        deal_terms=make_analysis(summary="TODO: 투자조건"),
-    )
+    return run_founder_traction(state)
