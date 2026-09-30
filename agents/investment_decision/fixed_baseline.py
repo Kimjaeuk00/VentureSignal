@@ -9,7 +9,7 @@
 from datetime import date
 
 from core.config import SCORE_MAX, SCORECARD_WEIGHTS
-from .scoring import build_scorecard
+from .scoring import REQUIRED_CRITERIA, build_core_scorecard
 
 
 BASELINE_VERSION = "v1"
@@ -177,26 +177,27 @@ def load_fixed_baseline() -> dict:
         if set(scores) != set(BASELINE_WEIGHTS):
             raise ValueError(f"{name}의 평가 항목이 일치하지 않습니다.")
 
-        missing = [
-            key
-            for key, value in scores.items()
-            if value is None
-        ]
-
-        if missing:
+        if all(value is None for value in scores.values()):
             raise ValueError(
-                f"{name}의 기준 점수가 아직 확정되지 않았습니다: "
-                f"{', '.join(missing)}"
+                f"{name}의 기준 점수가 아직 확정되지 않았습니다."
             )
 
         # 현재 채점 스키마와 동일하게 항목별 정수 점수를 사용한다.
+        # 후보와 같은 핵심 점수 규칙을 쓴다: 필수 5항목만 100점 환산하고 투자조건은 참고(미산정 None 허용).
         for key, value in scores.items():
-            if type(value) is not int:
+            if value is not None and type(value) is not int:
                 raise ValueError(
-                    f"{name}.{key}는 0~5 범위의 정수여야 합니다."
+                    f"{name}.{key}는 0~5 범위의 정수 또는 None(미산정)이어야 합니다."
                 )
 
-        scorecard = build_scorecard(scores)
+        scorecard = build_core_scorecard(scores)
+
+        if scorecard is None:
+            missing = [key for key in REQUIRED_CRITERIA if scores[key] is None]
+            raise ValueError(
+                f"{name}의 필수 항목 점수가 없어 핵심 점수를 산정할 수 없습니다: "
+                f"{', '.join(missing)}"
+            )
 
         companies.append({
             "company_id": company["company_id"],

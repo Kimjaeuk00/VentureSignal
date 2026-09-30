@@ -22,7 +22,7 @@ from core.config import (
 )
 from core.state import initial_state, merge_evaluations
 
-from .scoring import build_scorecard
+from .scoring import build_core_scorecard
 
 
 # 제공된 기준 기업 자료에 따른 날짜.
@@ -183,7 +183,8 @@ def _calculate_lower_bound(companies: list[dict]) -> float | None:
             for key in SCORECARD_WEIGHTS
         }
 
-        recalculated = build_scorecard(scores)
+        # 후보 채점과 같은 함수로 다시 계산한다(필수 5항목의 핵심 점수, 투자조건은 참고).
+        recalculated = build_core_scorecard(scores)
 
         if recalculated != company["scorecard"]:
             raise ValueError(

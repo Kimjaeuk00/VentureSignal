@@ -1,6 +1,7 @@
 import pytest
 
 from agents.investment_decision.scoring import build_scorecard, decide
+from core.config import INVEST_THRESHOLD
 
 KEYS = ("technology", "competition", "market", "team", "traction", "deal_terms")
 
@@ -8,14 +9,14 @@ KEYS = ("technology", "competition", "market", "team", "traction", "deal_terms")
 def test_full_score_is_100():
     sc = build_scorecard({k: 5 for k in KEYS})
     assert sc["total_score"] == 100.0
-    assert decide(sc) == "INVEST"
+    assert decide(sc, INVEST_THRESHOLD) == "INVEST"
 
 
 def test_weights_applied():
     # 기술(35%)만 5점 → 35점
     sc = build_scorecard({k: (5 if k == "technology" else 0) for k in KEYS})
     assert sc["total_score"] == 35.0
-    assert decide(sc) == "HOLD"
+    assert decide(sc, INVEST_THRESHOLD) == "HOLD"
 
 
 def test_missing_or_out_of_range_rejected():

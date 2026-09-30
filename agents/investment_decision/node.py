@@ -13,30 +13,50 @@
 처리:
 - LLM이 각 항목을 0~5점으로 채점한다.
 - Python이 출처와 출력 형식을 검증한다.
-- 투자조건이 미산정이면 계산에 기본점수 2.5점을 적용한다.
-- 원래 투자조건 분석의 미산정 상태와 미확인 사항은 보존한다.
-- 다른 항목이 미산정이면 총점을 계산하지 않는다.
-- 고정 하한값 비교와 INVEST/HOLD 판정은 수행하지 않는다.
+- 판정에 쓰는 총점은 핵심 점수다: 필수 5항목(기술력·경쟁 우위·시장성·창업자·실적)의 가중합을 비중 합(95%)으로 나눠
+  100점 환산한다. 투자조건은 참고 항목이라 채점되어 있어도 총점에서 항상 제외한다(0점·기본점수로 채우지 않는다).
+  필수 항목이 하나라도 미산정이면 총점을 내지 않고 근거 부족으로 HOLD 한다.
+- 총점이 하한값 근처이거나 총점이 없으면 채점을 더 해서 항목별 중앙값을 쓴다(채점 흔들림 완화).
+- 미산정 항목의 이유와 미확인 사항은 assessment 에 그대로 보존한다.
+- 총점을 하한값과 비교해 INVEST/HOLD 를 판정한다(엄격히 초과해야 INVEST). 이 노드가 판정하므로 INVEST 면
+  selected_candidate 도 함께 반환해 그래프가 보고서 생성으로 넘어간다.
+  - 하한값: 팀이 확정한 기준(fixed_baseline.load_fixed_baseline)이 있으면 그것, 아직 확정 전이면 임시값
+    core.config.INVEST_THRESHOLD 를 쓰고 결과의 decision_basis 에 그 사실을 남긴다.
+  - 총점이 없으면(투자조건 외 항목 미산정) HOLD.
 """
 
 import json
+import logging
 import re
+import statistics
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
-from core.config import SCORECARD_WEIGHTS
+from core.config import INVEST_THRESHOLD, SCORECARD_WEIGHTS
 from core.llm import get_llm
+from core.sources import SourceBook
 from core.state import GraphState, evaluation_update
 
+from .fixed_baseline import load_fixed_baseline
 from .prompts import INVESTMENT_SYSTEM_PROMPT, INVESTMENT_USER_PROMPT
 from .schemas import InvestmentAssessment
-from .scoring import build_scorecard
+from .scoring import REQUIRED_CRITERIA, build_core_scorecard, decide
+
+logger = logging.getLogger(__name__)
 
 
 CRITERIA = tuple(SCORECARD_WEIGHTS)
 
-DEFAULT_DEAL_TERMS_SCORE = 2.5
+# 채점 결과가 출처·형식 검증에 실패하면 오류를 알려 주고 다시 요청하는 최대 시도 횟수
+MAX_ASSESS_ATTEMPTS = 2
+
+# 총점이 하한값에서 이 점수 이내이거나 총점이 없으면(필수 항목이 미산정) 채점을 EXTRA_SAMPLES 번 더 해서
+# 항목별 중앙값으로 정한다. 이 모델은 온도를 낮출 수 없어 같은 자료도 채점이 흔들리는데, 판정이 갈리는 구간에서만
+# 비용(LLM 호출)을 쓴다. 웹 검색은 다시 하지 않는다.
+NEAR_BOUND_MARGIN = 5.0
+EXTRA_SAMPLES = 2
 
 LABELS = {
     "technology": "제품·기술력",
@@ -260,6 +280,24 @@ def _validate_assessment(
             )
 
 
+def _restore_sources(
+    assessment: InvestmentAssessment,
+    book: SourceBook,
+) -> None:
+    """LLM 이 쓴 출처 번호(U1…)를 State 의 URL 로 되돌린다. 입력에 없던 번호·URL 은 근거와 본문에서 뺀다.
+
+    LLM 에게는 URL 을 보여 주지 않았으므로 URL 을 베끼다 틀리는 사고가 없다.
+    뺀 결과 점수의 근거가 사라지면 이어지는 _validate_assessment 가 실패시켜 다시 요청한다.
+    """
+    for key in CRITERIA:
+        item = getattr(assessment, key)
+        item.evidence = book.resolve(item.evidence)
+        item.rationale = book.restore(item.rationale)
+        item.missing_information = [
+            book.restore(text) for text in item.missing_information
+        ]
+
+
 def _normalize_founder_sources(analyses: dict) -> dict:
     """창업자·실적 분석의 내부 출처 ID를 URL과 연결한다."""
     result = deepcopy(analyses)
@@ -322,10 +360,11 @@ def _normalize_founder_sources(analyses: dict) -> dict:
 
 
 def build_evaluation_result(assessment_data: dict) -> dict:
-    """기본점수 정책을 적용하고 가중합을 계산한다.
+    """핵심 점수를 계산한다: 필수 5항목만 100점 환산하고 투자조건은 참고로만 둔다.
 
-    assessment에는 근거에 따른 원래 점수를 보존한다.
-    scorecard에는 실제 계산에 적용한 점수를 넣는다.
+    assessment에는 근거에 따른 원래 점수(미산정은 None)를 보존한다.
+    scorecard에는 항목별 점수와 핵심 점수(total_score), coverage(총점에 쓴 비중 합), unscored(미산정 항목)를 넣는다.
+    필수 항목이 하나라도 미산정이면 scorecard 는 None(근거 부족)이다.
     """
     assessment_data = deepcopy(assessment_data)
 
@@ -334,35 +373,39 @@ def build_evaluation_result(assessment_data: dict) -> dict:
         for key in CRITERIA
     }
 
-    # 실제 투자조건 점수가 있으면 그대로 사용한다.
-    # 미산정일 때만 계산에 기본점수를 적용한다.
-    if scores["deal_terms"] is None:
-        scores["deal_terms"] = DEFAULT_DEAL_TERMS_SCORE
-
-        note = (
-            "[기본점수 적용] 투자조건의 핵심 정보가 부족하여 "
-            f"가중합 계산에는 정책상 기본점수 "
-            f"{DEFAULT_DEAL_TERMS_SCORE}/5점을 적용했습니다. "
-            "실제 자금 여력이나 런웨이가 확인되었다는 뜻은 아닙니다."
-        )
-
-        rationale = assessment_data["deal_terms"]["rationale"]
-
-        if note not in rationale:
-            assessment_data["deal_terms"]["rationale"] = (
-                f"{rationale}\n\n{note}"
-            )
-
-    # 투자조건 외 항목이 미산정이면 총점은 계산하지 않는다.
-    if any(score is None for score in scores.values()):
-        scorecard = None
-    else:
-        scorecard = build_scorecard(scores)
-
     return {
         "assessment": assessment_data,
-        "scorecard": scorecard,
+        "scorecard": build_core_scorecard(scores),
     }
+
+
+def merge_samples(results: list[dict]) -> dict:
+    """여러 번 채점한 결과를 항목별 중앙값으로 합친다.
+
+    항목이 미산정(None)인 채점이 절반 이상이면 그 항목은 미산정이다. 값이 짝수 개면 낮은 쪽 중앙값을 쓴다.
+    근거·출처는 선택한 점수와 같은 점수를 낸 첫 채점의 것을 그대로 쓴다(서로 다른 채점의 문장을 섞지 않는다).
+    """
+    merged = {}
+
+    for key in CRITERIA:
+        values = [result["assessment"][key]["score"] for result in results]
+        scored = [value for value in values if value is not None]
+
+        chosen = (
+            statistics.median_low(scored)
+            if len(scored) * 2 > len(values)
+            else None
+        )
+
+        source = next(
+            result["assessment"][key]
+            for result in results
+            if result["assessment"][key]["score"] == chosen
+        )
+
+        merged[key] = {**deepcopy(source), "score": chosen}
+
+    return build_evaluation_result(merged)
 
 
 def assess(state: GraphState) -> dict:
@@ -456,39 +499,152 @@ def assess(state: GraphState) -> dict:
   모든 기업에 NPU 성능이나 자체 칩 양산을 일률적으로 요구하지 않습니다.
 """
 
+    # LLM 에게는 URL 대신 출처 번호(U1…)를 보여 준다. RAG 출처 ID(S006)는 그대로 둔다.
+    book = SourceBook(rag_ids={s for s in allowed_sources if not s.startswith(("https://", "http://"))})
+
     user_prompt = INVESTMENT_USER_PROMPT.format(
         query=state["query"],
         candidate_info=_to_json(candidate_info),
-        evaluation_context=_to_json(analyses),
+        evaluation_context=book.mask(_to_json(analyses)),
     )
+
+    # 프롬프트에 번호로 보여 준 URL 은 모두 입력으로 제공된 출처다 (본문에만 있던 URL 도 포함).
+    allowed_sources = allowed_sources | book.urls()
 
     model = get_llm().with_structured_output(
         InvestmentAssessment
     )
 
-    response = model.invoke([
-        (
-            "system",
-            INVESTMENT_SYSTEM_PROMPT + "\n" + temporal_instruction,
-        ),
-        ("human", user_prompt),
-    ])
+    system_prompt = INVESTMENT_SYSTEM_PROMPT + "\n" + temporal_instruction
+    feedback = ""
 
-    assessment = InvestmentAssessment.model_validate(response)
+    for attempt in range(1, MAX_ASSESS_ATTEMPTS + 1):
+        human_prompt = user_prompt
 
-    # 기본점수 적용 전에 LLM의 원래 출력을 검증한다.
-    _validate_assessment(assessment, allowed_sources)
+        if feedback:
+            human_prompt += (
+                f"\n\n[이전 시도의 문제] {feedback}\n"
+                "입력에 제공된 출처 번호(U1 …)와 S번호만 그대로 사용하고 "
+                "출력 규칙을 지켜 다시 작성하세요."
+            )
+
+        try:
+            response = model.invoke([
+                ("system", system_prompt),
+                ("human", human_prompt),
+            ])
+
+            assessment = InvestmentAssessment.model_validate(response)
+
+            # 출처 번호를 URL 로 되돌린다 (없는 번호는 뺀다).
+            _restore_sources(assessment, book)
+
+            # LLM의 원래 출력을 검증한다.
+            _validate_assessment(assessment, allowed_sources)
+            break
+        except ValueError as exc:
+            feedback = str(exc)
+            logger.warning(
+                "채점 결과 검증 실패 (시도 %d/%d): %s",
+                attempt, MAX_ASSESS_ATTEMPTS, feedback,
+            )
+
+            if attempt == MAX_ASSESS_ATTEMPTS:
+                raise
 
     return build_evaluation_result(assessment.model_dump())
 
 
-def run(state: GraphState) -> dict:
-    """여섯 항목 평가와 가중합 결과를 State에 전달한다."""
-    result = assess(state)
-    cid = state["current_candidate"]
+def resolve_lower_bound() -> tuple[float, dict]:
+    """(하한값, 판정 근거). 확정된 기준이 있으면 그 하한값, 아직 확정 전이면 임시 하한값."""
+    try:
+        return load_fixed_baseline()["lower_bound"], {"source": "fixed_baseline"}
+    except ValueError as exc:  # 기준 기업 점수·하한값 미확정
+        logger.warning("확정된 하한값이 없어 임시값 %s 를 쓴다: %s", INVEST_THRESHOLD, exc)
+        return INVEST_THRESHOLD, {"source": "temporary", "reason": str(exc)}
 
-    return evaluation_update(
+
+def _needs_more_samples(scorecard, lower_bound: float) -> bool:
+    """판정이 갈릴 수 있는 구간인가: 총점이 없거나(필수 항목 미산정 — 한 번의 null 로 HOLD 가 될 수 있다) 하한값 근처."""
+    return scorecard is None or abs(scorecard["total_score"] - lower_bound) <= NEAR_BOUND_MARGIN
+
+
+def _extra_samples(state: GraphState) -> list[dict]:
+    """같은 입력으로 채점을 EXTRA_SAMPLES 번 더 한다. 실패한 채점은 버린다."""
+    def one(_):
+        try:
+            return assess(state)
+        except Exception:
+            logger.exception("추가 채점에 실패해 그 채점은 버린다")
+            return None
+
+    with ThreadPoolExecutor(max_workers=EXTRA_SAMPLES) as pool:
+        return [result for result in pool.map(one, range(EXTRA_SAMPLES)) if result]
+
+
+def run(state: GraphState) -> dict:
+    """여섯 항목을 채점하고 핵심 점수로 INVEST/HOLD 를 판정한다. INVEST 면 selected_candidate 도 반환한다."""
+    cid = state["current_candidate"]
+    lower_bound, basis = resolve_lower_bound()
+
+    try:
+        first = assess(state)
+    except Exception as exc:
+        # 한 후보의 채점 실패로 그래프 전체가 멈추지 않게 한다. 이 후보는 HOLD 로 두고 다음 후보로 넘어간다.
+        logger.exception("%s 채점에 실패해 HOLD 로 처리한다", cid)
+        return evaluation_update(
+            cid,
+            assessment={},
+            scorecard=None,
+            decision="HOLD",
+            decision_basis={
+                "source": "none",
+                "hold_reason": "scoring_failed",
+                "reason": f"채점 실패: {type(exc).__name__}: {exc}"[:300],
+            },
+        )
+
+    results = [first]
+
+    if _needs_more_samples(first["scorecard"], lower_bound):
+        results += _extra_samples(state)
+
+    result = merge_samples(results) if len(results) > 1 else first
+    scorecard = result["scorecard"]
+
+    if scorecard is None:  # 필수 항목이 미산정이라 총점을 내지 않았다
+        missing = [
+            LABELS[key]
+            for key in REQUIRED_CRITERIA
+            if result["assessment"][key]["score"] is None
+        ]
+        decision = "HOLD"
+        basis = {
+            "source": "none",
+            "hold_reason": "insufficient_evidence",
+            "reason": f"필수 항목 미산정으로 핵심 점수를 내지 않았다 ({', '.join(missing)})",
+            "unscored_required": missing,
+            "samples": len(results),
+        }
+    else:
+        decision = decide(scorecard, lower_bound)
+        basis = {
+            **basis,
+            "lower_bound": lower_bound,
+            "total_score": scorecard["total_score"],
+            "coverage": scorecard["coverage"],
+            "unscored": scorecard["unscored"],
+            "samples": len(results),
+            **({"hold_reason": "score_below_bound"} if decision == "HOLD" else {}),
+        }
+
+    update = evaluation_update(
         cid,
         assessment=result["assessment"],
-        scorecard=result["scorecard"],
+        scorecard=scorecard,
+        decision=decision,
+        decision_basis=basis,
     )
+    if decision == "INVEST":
+        update["selected_candidate"] = cid
+    return update
