@@ -1,0 +1,18 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+.DS_Store
+
+# 생성물 (python -m rag.ingest 로 재생성)
+data/index/
+
+# 생성된 보고서
+outputs/*
+!outputs/.gitkeep
+
+docs/
+CLAUDE.md
+
+

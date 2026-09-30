@@ -1,0 +1,22 @@
+# Python 3.11+
+# 버전 고정: 팀원 간 동일 환경 유지. 변경 시 팀 공유 후 PR로 반영.
+
+# --- Graph / LLM ---
+langgraph==1.2.12
+langchain==1.4.3
+langchain-core==1.6.6
+langchain-openai==1.6.6
+langchain-anthropic==1.7.5
+pydantic==2.13.5
+python-dotenv==1.2.3
+
+# --- RAG ---
+FlagEmbedding==1.4.2          # BAAI/bge-m3 dense + sparse
+qdrant-client==1.19.1         # 로컬 파일 모드, dense+sparse 하이브리드
+pymupdf==1.28.2               # PDF 텍스트 추출
+
+# --- Web search ---
+tavily-python==0.8.4
+
+# --- Test ---
+pytest==9.1.1
