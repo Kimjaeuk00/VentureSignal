@@ -12,7 +12,10 @@ data/index/
 outputs/*
 !outputs/.gitkeep
 
-docs/
+# docs/ 는 설계 기준 문서(md, pdf)만 추적
+docs/*
+!docs/RAG-Design_*.md
+!docs/RAG-Design_*.pdf
 CLAUDE.md
 
 
