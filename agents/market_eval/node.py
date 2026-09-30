@@ -63,6 +63,131 @@ def _analyze(
     return result
 
 
+_CITATION_PATTERN = re.compile(
+    r"""https?://[^\s<>"'\[\]{}]+|\bS\d{3}\b"""
+)
+
+# 허용되지 않은 출처를 LLM이 인용했을 때 다시 요청하는 최대 횟수
+MAX_EVIDENCE_RETRIES = 1
+
+
+def _normalize_source(source: str, allowed_sources: set[str]) -> str:
+    source = source.strip()
+
+    # "[S006]" → "S006"
+    match = re.fullmatch(r"\[(S\d{3})\]", source)
+    if match:
+        source = match.group(1)
+
+    # 실제 제공된 URL은 그대로 유지한다.
+    if source in allowed_sources:
+        return source
+
+    # URL 뒤에 문장부호가 붙은 경우:
+    # 문장부호를 제거한 값이 실제 제공된 출처와 일치할 때만 보정한다.
+    if source.startswith(("https://", "http://")):
+        candidate = source
+
+        while candidate and candidate[-1] in ".,;:!?)]。，；":
+            candidate = candidate[:-1]
+
+            if candidate in allowed_sources:
+                return candidate
+
+    return source
+
+
+def _strip_unknown_sources(
+    result: MarketAnalysis,
+    allowed_sources: set[str],
+) -> int:
+    """허용되지 않은 출처를 본문과 evidence에서 제거한다. 제거한 수를 반환한다."""
+    removed = 0
+
+    def clean_text(text: str) -> str:
+        nonlocal removed
+
+        def replace(match: re.Match) -> str:
+            nonlocal removed
+            token = match.group(0)
+            if _normalize_source(token, allowed_sources) in allowed_sources:
+                return token
+            removed += 1
+            return "(출처 미확인)"
+
+        return _CITATION_PATTERN.sub(replace, text)
+
+    details = result.details
+    result.summary = clean_text(result.summary)
+    result.strengths = [clean_text(t) for t in result.strengths]
+    result.risks = [clean_text(t) for t in result.risks]
+    details.target_customers = [clean_text(t) for t in details.target_customers]
+    details.market_size = clean_text(details.market_size)
+    details.growth_drivers = [clean_text(t) for t in details.growth_drivers]
+    details.business_model = clean_text(details.business_model)
+    details.adoption_barriers = [clean_text(t) for t in details.adoption_barriers]
+    details.missing_information = [
+        clean_text(t) for t in details.missing_information
+    ]
+
+    kept = [
+        _normalize_source(source, allowed_sources)
+        for source in result.evidence
+    ]
+    kept = [source for source in kept if source in allowed_sources]
+    removed += len(result.evidence) - len(kept)
+    result.evidence = kept
+    return removed
+
+
+def _analyze_checked(
+    model,
+    inputs: dict,
+    stage: str,
+    web_context: dict,
+    allowed_sources: set[str],
+) -> MarketAnalysis:
+    """분석하고 출처를 검증한다.
+
+    허용되지 않은 출처가 있으면 오류를 알려 주고 다시 요청한다.
+    그래도 남으면 그 출처만 제거하고 미확인 사항에 기록한다.
+    한 후보의 출처 오류로 그래프 전체가 멈추지 않게 한다.
+    """
+    context = web_context
+    last_error: ValueError | None = None
+
+    for _ in range(MAX_EVIDENCE_RETRIES + 1):
+        result = _analyze(model, inputs, stage, context)
+
+        try:
+            _validate_evidence(result, allowed_sources)
+            return result
+        except ValueError as exc:
+            last_error = exc
+            context = {
+                **web_context,
+                "previous_error": (
+                    f"{exc} 제공된 출처 ID와 URL만 인용하고 "
+                    "evidence에도 그 값만 넣는다."
+                ),
+            }
+
+    removed = _strip_unknown_sources(result, allowed_sources)
+
+    try:
+        _validate_evidence(result, allowed_sources)
+    except ValueError:
+        # 남은 evidence가 본문 인용과 맞지 않으면 비운다.
+        result.evidence = []
+
+    result.details.missing_information.append(
+        "분석 결과에 제공되지 않은 출처 "
+        f"{removed}건이 있어 제거함. 해당 근거는 확인 필요. "
+        f"({last_error})"
+    )
+    return result
+
+
 def _validate_evidence(
     result: MarketAnalysis,
     allowed_sources: set[str],
@@ -70,29 +195,7 @@ def _validate_evidence(
     """출처 유효성을 검사하고 본문 인용과 evidence를 맞춘다."""
 
     def normalize(source: str) -> str:
-        source = source.strip()
-
-        # "[S006]" → "S006"
-        match = re.fullmatch(r"\[(S\d{3})\]", source)
-        if match:
-            source = match.group(1)
-
-        # 실제 제공된 URL은 그대로 유지한다.
-        if source in allowed_sources:
-            return source
-
-        # URL 뒤에 문장부호가 붙은 경우:
-        # 문장부호를 제거한 값이 실제 제공된 출처와 일치할 때만 보정한다.
-        if source.startswith(("https://", "http://")):
-            candidate = source
-
-            while candidate and candidate[-1] in ".,;:!?)]。，；":
-                candidate = candidate[:-1]
-
-                if candidate in allowed_sources:
-                    return candidate
-
-        return source
+        return _normalize_source(source, allowed_sources)
 
     # 1. LLM이 반환한 evidence 자체의 유효성 검사
     declared_sources = [
@@ -128,13 +231,9 @@ def _validate_evidence(
 
     # URL을 먼저 인식하여 URL 내부의 S006 같은 문자열을
     # 별도 RAG 출처로 중복 추출하지 않는다.
-    citation_pattern = re.compile(
-        r"""https?://[^\s<>"'\[\]{}]+|\bS\d{3}\b"""
-    )
-
     cited_sources = [
         normalize(match.group(0))
-        for match in citation_pattern.finditer(body)
+        for match in _CITATION_PATTERN.finditer(body)
     ]
 
     # 등장 순서를 유지하며 중복 제거
@@ -243,16 +342,15 @@ def run(state: GraphState) -> dict:
     # 이 호출에서 분석 결과와 필요한 웹 검색 계획을 함께 받는다.
     model = get_llm().with_structured_output(MarketAnalysis)
 
-    initial = _analyze(
+    initial = _analyze_checked(
         model=model,
         inputs=inputs,
         stage="RAG 초기 분석",
         web_context={
             "status": "아직 웹 검색을 실행하지 않음",
         },
+        allowed_sources=allowed_sources,
     )
-
-    _validate_evidence(initial, allowed_sources)
 
     # 미확인 사항의 빈 문자열과 중복 제거
     missing = list(dict.fromkeys(
@@ -355,7 +453,7 @@ def run(state: GraphState) -> dict:
         if web_by_url:
             allowed_sources.update(web_by_url.keys())
 
-            final = _analyze(
+            final = _analyze_checked(
                 model=model,
                 inputs=inputs,
                 stage="웹 보완 후 최종 분석",
@@ -376,9 +474,8 @@ def run(state: GraphState) -> dict:
                         "web_search_queries는 빈 목록으로 반환한다."
                     ),
                 },
+                allowed_sources=allowed_sources,
             )
-
-            _validate_evidence(final, allowed_sources)
 
         else:
             # 검색 실패 또는 결과 없음:
