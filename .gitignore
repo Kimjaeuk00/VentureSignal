@@ -3,7 +3,6 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .env*
-!.env.example
 .DS_Store
 
 # 생성물 (python -m rag.ingest 로 재생성)
