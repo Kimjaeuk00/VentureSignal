@@ -41,6 +41,18 @@ class CandidateData:
     analyses: dict[str, dict]  # ANALYSIS_KEYS → AnalysisResult (없으면 {})
     scorecard: dict
     decision: Optional[str]
+    assessment: dict = field(default_factory=dict)  # 투자 판단 노드의 항목별 {score, rationale, evidence, missing_information}
+    decision_basis: dict = field(default_factory=dict)  # 판정 근거: hold_reason(insufficient_evidence/score_below_bound/scoring_failed) 등
+
+    def assessed(self, key: str) -> dict:
+        return self.assessment.get(key) or {}
+
+    def score(self, key: str) -> Optional[float]:
+        """항목 점수. scorecard(총점 계산에 쓴 점수)가 없으면(미산정 항목이 있어 총점을 못 낸 경우) 투자 판단의 항목별 채점을 쓴다."""
+        for value in (self.scorecard.get(key), get(self.assessed(key), "score")):
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                return value
+        return None
 
     def analysis(self, key: str) -> dict:
         return self.analyses.get(key) or {}
@@ -103,6 +115,8 @@ def _candidate_data(cid: str, state: GraphState) -> CandidateData:
         analyses={k: evaluation.get(k) or {} for k in ANALYSIS_KEYS},
         scorecard=evaluation.get("scorecard") or {},
         decision=evaluation.get("decision"),
+        assessment=evaluation.get("assessment") or {},
+        decision_basis=evaluation.get("decision_basis") or {},
     )
 
 
@@ -116,8 +130,11 @@ def _as_of(candidates: list[CandidateData]) -> str:
     return max(dates) if dates else date.today().isoformat()
 
 
-def _url_titles(candidates: list[CandidateData]) -> dict[str, str]:
-    titles: dict[str, str] = {}
+def _url_titles(candidates: list[CandidateData], state_sources: Optional[dict] = None) -> dict[str, str]:
+    """URL → 제목. State 의 sources(분석 노드들이 남긴 것)와 창업자·실적 분석의 details.sources 를 합친다."""
+    titles: dict[str, str] = {
+        url: info["title"] for url, info in (state_sources or {}).items()
+        if isinstance(info, dict) and info.get("title") and info["title"] != url}
     for c in candidates:
         for key in ANALYSIS_KEYS:
             for src in get(c.details(key), "sources", default=[]) or []:
@@ -148,9 +165,12 @@ def collect(state: GraphState) -> ReportContext:
         candidates=candidates,
         # 평가 결과가 없는 후보만 (INVEST 전에 이미 평가하고 보류한 후보는 평가한 후보다)
         unevaluated=[names[cid] for cid in all_ids if cid not in state.get("evaluations", {})],
-        url_titles=_url_titles(candidates),
+        url_titles=_url_titles(candidates, state.get("sources")),
     )
 
+
+# 총점(핵심 점수)에서 제외하고 참고용으로만 보여 주는 항목 — 투자 판단 노드의 REFERENCE_CRITERIA 와 같다
+REFERENCE_ITEMS = ("deal_terms",)
 
 # E절 7절의 평가 항목 순서와 표시 이름 (점수 키는 core.state.ScorecardResult 와 같다)
 ITEM_ORDER = [

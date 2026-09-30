@@ -19,7 +19,7 @@ from langsmith import traceable
 from core.config import SCORECARD_WEIGHTS
 from core.llm import get_llm
 
-from .collect import ITEM_LABEL, ITEM_ORDER, MISSING, CandidateData, ReportContext, get, missing_labels
+from .collect import ITEM_LABEL, ITEM_ORDER, MISSING, REFERENCE_ITEMS, CandidateData, ReportContext, get, missing_labels
 from .fallback import SCORE_MAX, hold_prose, invest_prose
 from .prompts import HOLD_SYSTEM, INVEST_SYSTEM
 from .schemas import CompanyHoldProse, HoldProse, InvestProse
@@ -74,9 +74,13 @@ def _render_candidate(c: CandidateData) -> str:
     total = c.scorecard.get("total_score")
     lines.append(f"총점: {total:g} / 100" if isinstance(total, (int, float)) else f"총점: {MISSING}")
     for key, label in ITEM_ORDER:
-        score = c.scorecard.get(key)
-        score_text = f"{score:g}/{SCORE_MAX}" if isinstance(score, (int, float)) else MISSING
-        lines.append(f"\n- {label} (비중 {SCORECARD_WEIGHTS[key] * 100:g}%, 점수 {score_text})")
+        score = c.score(key)
+        score_text = f"{score:g}/{SCORE_MAX}" if score is not None else MISSING
+        weight = "참고용, 총점 제외" if key in REFERENCE_ITEMS else f"비중 {SCORECARD_WEIGHTS[key] * 100:g}%"
+        lines.append(f"\n- {label} ({weight}, 점수 {score_text})")
+        scored = c.assessed(key)
+        if get(scored, "rationale", default=""):  # 투자 판단 노드가 점수와 함께 남긴 근거 — 항목별 근거 문장은 이것을 따른다
+            lines.append(f"  채점 근거: {_clean(get(scored, 'rationale', default=''))}")
         if c.is_degraded(key):
             lines.append(f"  상태: 근거 부족 또는 자료 없음 — {_clean(get(c.analysis(key), 'summary', default=MISSING))}")
             continue

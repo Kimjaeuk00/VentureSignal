@@ -13,7 +13,7 @@ from datetime import date
 from core.config import SCORECARD_WEIGHTS
 
 from .collect import (
-    ITEM_LABEL, ITEM_ORDER, MISSING, CandidateData, ReportContext, get, missing_labels,
+    ITEM_LABEL, ITEM_ORDER, MISSING, REFERENCE_ITEMS, CandidateData, ReportContext, get, missing_labels,
 )
 from .document import Document, Paragraph, Section, SubHeading, Table
 from .fallback import SCORE_MAX, item_rationale, loss_ranking, risks_of
@@ -56,8 +56,33 @@ def _finding(details: dict, key: str) -> tuple[str, list[str]]:
 
 
 def _score(cand: CandidateData, key: str) -> str:
-    v = cand.scorecard.get(key)
-    return f"{v:g}" if isinstance(v, (int, float)) else MISSING
+    v = cand.score(key)
+    return f"{v:g}" if v is not None else MISSING
+
+
+def _core_note(cand: CandidateData, named: bool = True) -> str:
+    """총점(핵심 점수)이 어떻게 계산됐는지: 참고 항목(투자조건)은 총점에서 제외하고 필수 5항목만 100점으로 환산한다."""
+    coverage = cand.scorecard.get("coverage")
+    if not isinstance(coverage, (int, float)) or _total(cand) == MISSING:
+        return ""
+    reference = ", ".join(ITEM_LABEL[k] for k in REFERENCE_ITEMS)
+    return (f"{cand.company_name + ': ' if named else ''}{reference}은 판정에 포함하지 않고 참고 정보로만 표시했다"
+            f"(웹 조사로는 현금·소진액 등이 확인되지 않는 경우가 많다). "
+            f"총점은 나머지 항목의 비중 합({coverage * 100:g}%)을 100점으로 환산한 핵심 점수이다.")
+
+
+def _hold_type(cand: CandidateData) -> str:
+    """보류의 유형: 근거 부족 / 점수 미달 / 채점 실패. 임시 하한값은 확정 전이라 숫자를 적지 않는다."""
+    basis = cand.decision_basis
+    kind = basis.get("hold_reason")
+    if kind == "insufficient_evidence":
+        missing = ", ".join(basis.get("unscored_required") or [])
+        return f"근거 부족 — 필수 항목({missing or MISSING})이 채점되지 않아 핵심 점수를 산출하지 않았다."
+    if kind == "score_below_bound":
+        return "점수 미달 — 핵심 점수가 판정 기준 이하이다."
+    if kind == "scoring_failed":
+        return "채점 실패 — 이 후보는 채점하지 못해 보류로 처리했다."
+    return ""
 
 
 def _total(cand: CandidateData) -> str:
@@ -246,11 +271,14 @@ def _section_scorecard(c: CandidateData, prose: InvestProse, reg: SourceRegistry
     rows = []
     for key, label in ITEM_ORDER:
         rationale = getattr(prose.item_rationales, key, "") or MISSING
-        rows.append([label, f"{SCORECARD_WEIGHTS[key] * 100:g}%", _score(c, key),
-                     f"{reg.rewrite(brief(rationale, 220))} {reg.cite(c.evidence(key)[:3])}".strip()])
-    rows.append(["**총점**", "**100%**", f"**{_total(c)} / 100**", ""])
+        weight = "참고" if key in REFERENCE_ITEMS else f"{SCORECARD_WEIGHTS[key] * 100:g}%"
+        rows.append([f"{label}(참고)" if key in REFERENCE_ITEMS else label, weight, _score(c, key),
+                     f"{reg.rewrite(brief(rationale, 220))} {reg.cite((get(c.assessed(key), 'evidence', default=[]) or c.evidence(key))[:3])}".strip()])
+    rows.append(["**핵심 점수**", f"**{sum(w for k, w in SCORECARD_WEIGHTS.items() if k not in REFERENCE_ITEMS) * 100:g}%**", f"**{_total(c)} / 100**", ""])
+    note = _core_note(c, named=False)
     return Section("7. 종합 평가와 투자 판단", [
         Table(["평가 항목", "비중", "점수 0~5", "핵심 근거·출처"], rows, [16, 9, 13, 62]),
+        *([Paragraph(f"※ {note}")] if note else []),
         Paragraph(f"**최종 판단** 투자 검토 · **판단 이유** {reg.rewrite(brief(prose.decision_reason, 420))}"),
         Paragraph(f"**재검토 조건** {reg.rewrite(brief(prose.revisit_conditions, 420))}"),
     ])
@@ -294,9 +322,14 @@ def build_hold_document(ctx: ReportContext, prose: HoldProse, reg: SourceRegistr
         Paragraph(reg.rewrite(prose.summary)),
     ])
 
-    headers = ["기업", "총점", *[f"{label} ({SCORECARD_WEIGHTS[key] * 100:g}%)" for key, label in ITEM_ORDER]]
+    headers = ["기업", "총점", *[f"{label} ({'참고' if key in REFERENCE_ITEMS else f'{SCORECARD_WEIGHTS[key] * 100:g}%'})" for key, label in ITEM_ORDER]]
     score_rows = [[c.company_name, f"{_total(c)} / 100", *[_score(c, key) for key, _ in ITEM_ORDER]] for c in ctx.candidates]
-    scores = Section("2. 후보별 평가 결과", [Table(headers, score_rows), Paragraph(f"점수는 항목별 0~{SCORE_MAX}점이다.")])
+    notes = dedupe(n for n in (_core_note(c, named=False) for c in ctx.candidates) if n)  # 후보마다 같은 설명이라 한 번만
+    scores = Section("2. 후보별 평가 결과", [
+        Table(headers, score_rows),
+        Paragraph(f"점수는 항목별 0~{SCORE_MAX}점이다."),
+        *[Paragraph(f"※ {n}") for n in notes],
+    ])
 
     reasons = Section("3. 후보별 보류 사유")
     for c in ctx.candidates:
@@ -311,6 +344,9 @@ def build_hold_document(ctx: ReportContext, prose: HoldProse, reg: SourceRegistr
             reasons.blocks.append(Table(["항목", "점수 0~5", "사유·근거", "출처"], rows, [16, 10, 62, 12]))
         else:
             reasons.blocks.append(Paragraph(f"점수 정보를 확보하지 못했다 ({MISSING})."))
+        kind = _hold_type(c)
+        if kind:
+            reasons.blocks.append(Paragraph(f"**보류 유형** {kind}"))
         reasons.blocks.append(Paragraph(f"**보류 사유** {reg.rewrite(cp.reasons) if cp else MISSING}"))
         reasons.blocks.append(Paragraph(f"**확인하지 못한 항목** {join(missing_labels(c, [k for k, _ in ITEM_ORDER]), ', ', limit=8) or MISSING}"))
         reasons.blocks.append(Paragraph(f"**재검토 조건** {reg.rewrite(cp.revisit_conditions) if cp else MISSING}"))

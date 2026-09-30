@@ -13,6 +13,7 @@ import re
 from typing import Iterable, Optional
 from urllib.parse import urlsplit
 
+from core.sources import source_key
 from rag.sources import load_sources
 
 # S번호는 다른 글자에 붙어 있으면(DX-S010) 출처가 아니다. URL 끝의 문장부호는 URL 이 아니다.
@@ -24,6 +25,7 @@ S_ID_RE = re.compile(r"^S\d{3}$")
 DATE_RE = re.compile(r"\d{4}(?:-\d{2}-\d{2})?")
 
 NO_DATE = "발행일 미표기"
+REPEATED_CITE_RE = re.compile(r"(\[\d+(?:, \d+)*\])(?:\s*\1)+")
 
 # sources.json 일부 항목의 url 뒤에 PDF 쪽 하단("05 • SOURCE REGISTER …")이 붙어 있다. 쪽 번호와 함께 잘라낸다.
 PAGE_FOOTER_RE = re.compile(r"\d{2}\s*•\s*SOURCE REGISTER.*$")
@@ -31,12 +33,6 @@ PAGE_FOOTER_RE = re.compile(r"\d{2}\s*•\s*SOURCE REGISTER.*$")
 
 def _domain(url: str) -> str:
     return urlsplit(url).netloc.removeprefix("www.")
-
-
-def _canon(url: str) -> str:
-    """같은 페이지의 URL 은 같은 키로 (www·끝 슬래시·대소문자 차이 무시)."""
-    p = urlsplit(url)
-    return f"{p.netloc.lower().removeprefix('www.')}{p.path.rstrip('/')}" + (f"?{p.query}" if p.query else "")
 
 
 def _alnum(text: str) -> str:
@@ -67,6 +63,7 @@ class SourceRegistry:
         self._order: list[str] = []
         self._index: dict[str, int] = {}  # 같은 페이지의 출처(S번호와 URL 포함)는 한 번호를 쓴다
         self._titles: dict[str, str] = dict(titles or {})
+        self._titles_by_key: dict[str, str] = {source_key(u): t for u, t in self._titles.items()}
         self.accessed = accessed
         try:
             self._rag = load_sources()
@@ -77,14 +74,15 @@ class SourceRegistry:
 
     def add_titles(self, titles: dict[str, str]) -> None:
         self._titles.update({u: t for u, t in titles.items() if u and t})
+        self._titles_by_key.update({source_key(u): t for u, t in titles.items() if u and t})
 
     def _key(self, source: str) -> str:
         if S_ID_RE.match(source):
             info = self._rag.get(source)
             if info:
-                return _canon(PAGE_FOOTER_RE.sub("", info["url"]).strip())
+                return source_key(PAGE_FOOTER_RE.sub("", info["url"]).strip())
             return source
-        return _canon(source) if source.startswith(("http://", "https://")) else source
+        return source_key(source) if source.startswith(("http://", "https://")) else source
 
     def number(self, source: str) -> int:
         source = source.strip()
@@ -103,7 +101,7 @@ class SourceRegistry:
             names = [info.get("publisher", "").partition(" · ")[0], info.get("title", "")]
             url = PAGE_FOOTER_RE.sub("", info.get("url", "")).strip()
         else:
-            names, url = [self._titles.get(source, "")], source
+            names, url = [self._titles.get(source) or self._titles_by_key.get(source_key(source), "")], source
         host = _domain(url).split(".") if url else []
         names.append(host[-2] if len(host) >= 2 and len(host[-2]) > 3 else (host[0] if host else ""))
         return [n for n in map(_alnum, names) if n]
@@ -133,7 +131,8 @@ class SourceRegistry:
             return self.cite([clean]) + token[len(clean):]  # 뒤에 딸려 온 문장부호는 본문에 남긴다
 
         # 한 번의 패스로 처리해야 번호가 본문 등장 순서를 따른다
-        return INLINE_RE.sub(replace, text)
+        out = INLINE_RE.sub(replace, text)
+        return REPEATED_CITE_RE.sub(r"\1", out)  # 같은 페이지를 S번호와 URL 로 잇달아 인용하면 [1] [1] 이 된다
 
     @staticmethod
     def _clean(token: str) -> str:
@@ -153,7 +152,7 @@ class SourceRegistry:
         if source.startswith(("http://", "https://")):
             domain = _domain(source)
             accessed = f"접속 {self.accessed}" if self.accessed else NO_DATE
-            title = self._titles.get(source)
+            title = self._titles.get(source) or self._titles_by_key.get(source_key(source))
             return f"{domain}({accessed}). *{title}*. {domain}, {source}" if title else f"{domain}({accessed}). {source}"
         return source  # 알 수 없는 형태는 그대로 보존한다
 

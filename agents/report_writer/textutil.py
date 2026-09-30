@@ -10,14 +10,6 @@ _SOURCE_START = re.compile(r"^[\[(]?\s*(?:S\d{3}|https?://)")  # 마침표 뒤�
 _CLAUSE_END = re.compile(r"[;,]\s|\s(?:—|-)\s")
 
 
-def first_sentence(text: str, limit: int = 160) -> str:
-    text = " ".join((text or "").split())
-    if not text:
-        return ""
-    sentence = _SENTENCE_SPLIT.split(text)[0]
-    return sentence if len(sentence) <= limit else sentence[: limit - 1].rstrip() + "…"
-
-
 def sentences(text: str) -> list[str]:
     out: list[str] = []
     for s in _SENTENCE_SPLIT.split(text):
@@ -42,12 +34,22 @@ def _cut(text: str, limit: int) -> str:
         if m.start() < pos < m.end():
             pos = m.end()
     head = text[:pos].rstrip(" ,;")
-    if head.count("(") > head.count(")"):  # 열린 괄호는 닫힌 곳까지 포함하거나 그 앞에서 자른다
-        close = text.find(")", pos)
-        if 0 <= close <= pos + 40:
-            return text[: close + 1] + "…"
-        head = head[: head.rfind("(")].rstrip(" ,;")
+    for open_ch, close_ch in (("(", ")"), ("[", "]")):  # 열린 괄호는 닫힌 곳까지 포함하거나 그 앞에서 자른다
+        if head.count(open_ch) > head.count(close_ch):
+            close = text.find(close_ch, pos)
+            if 0 <= close <= pos + 40:
+                return text[: close + 1] + "…"
+            head = head[: head.rfind(open_ch)].rstrip(" ,;")
     return head.rstrip(".。 ,;") + "…"
+
+
+def first_sentence(text: str, limit: int = 160) -> str:
+    """첫 문장. 길면 출처 URL·괄호를 자르지 않고 절 경계에서 줄인다."""
+    text = " ".join((text or "").split())
+    if not text:
+        return ""
+    sentence = sentences(text)[0]
+    return sentence if len(sentence) <= limit else _cut(sentence, limit)
 
 
 def brief(text: str, limit: int = 110) -> str:

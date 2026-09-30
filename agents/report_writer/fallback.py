@@ -6,7 +6,7 @@ State 에 있는 요약·강점·위험·미확인 항목을 이어 붙일 뿐 �
 
 from core.config import SCORECARD_WEIGHTS
 
-from .collect import ITEM_LABEL, ITEM_ORDER, MISSING, CandidateData, ReportContext, get, missing_labels
+from .collect import ITEM_LABEL, ITEM_ORDER, MISSING, REFERENCE_ITEMS, CandidateData, ReportContext, get, missing_labels
 from .schemas import CompanyHoldProse, HoldProse, InvestProse, ItemRationales
 from .textutil import dedupe, first_sentence, join
 
@@ -19,7 +19,10 @@ SCORE_MAX = 5
 
 
 def item_rationale(cand: CandidateData, key: str) -> str:
-    """해당 분석의 요약 첫 문장. 근거 부족이면 미확인."""
+    """투자 판단 노드의 채점 근거가 있으면 그 첫 문장, 없으면 해당 분석의 요약 첫 문장. 근거 부족이면 미확인."""
+    scored = first_sentence(get(cand.assessed(key), "rationale", default=""))
+    if scored:
+        return scored
     if cand.is_degraded(key):
         return f"{MISSING} (근거 부족)"
     return first_sentence(get(cand.analysis(key), "summary", default="")) or MISSING
@@ -38,15 +41,17 @@ def loss_ranking(cand: CandidateData) -> list[tuple[str, float]]:
     """총점 손실 기여도 (만점 대비 부족한 점수 × 비중) 가 큰 항목 순."""
     rows = []
     for key, _ in ITEM_ORDER:
-        score = cand.scorecard.get(key)
-        if isinstance(score, (int, float)):
+        if key in REFERENCE_ITEMS:  # 참고 항목은 총점에 들어가지 않으므로 총점 손실 기여를 따지지 않는다
+            continue
+        score = cand.score(key)
+        if score is not None:
             rows.append((key, (SCORE_MAX - score) * SCORECARD_WEIGHTS[key]))
     return sorted(rows, key=lambda r: (-r[1], -SCORECARD_WEIGHTS[r[0]]))
 
 
 def _score_text(cand: CandidateData, key: str) -> str:
-    score = cand.scorecard.get(key)
-    return f"{ITEM_LABEL[key]} {score:g}/{SCORE_MAX}" if isinstance(score, (int, float)) else f"{ITEM_LABEL[key]} {MISSING}"
+    score = cand.score(key)
+    return f"{ITEM_LABEL[key]} {score:g}/{SCORE_MAX}" if score is not None else f"{ITEM_LABEL[key]} {MISSING}"
 
 
 def _revisit(cand: CandidateData) -> str:
@@ -58,7 +63,7 @@ def _revisit(cand: CandidateData) -> str:
 
 def _lowest(cand: CandidateData) -> str:
     """실제 점수가 가장 낮은 항목 (가중 손실 기여와 다르다)."""
-    scored = [(cand.scorecard[k], k) for k, _ in ITEM_ORDER if isinstance(cand.scorecard.get(k), (int, float))]
+    scored = [(cand.score(k), k) for k, _ in ITEM_ORDER if k not in REFERENCE_ITEMS and cand.score(k) is not None]
     return _score_text(cand, min(scored)[1]) if scored else MISSING
 
 
@@ -71,7 +76,7 @@ def invest_prose(ctx: ReportContext) -> InvestProse:
         f"{tech or '핵심 제품·기술: ' + MISSING + '.'} "
         f"주요 강점: {strengths or MISSING}. 핵심 위험: {risks or MISSING}. {_revisit(c)}"
     )
-    best = sorted(((c.scorecard.get(k, 0), k) for k, _ in ITEM_ORDER), reverse=True)[:2]
+    best = sorted(((c.score(k), k) for k, _ in ITEM_ORDER if k not in REFERENCE_ITEMS and c.score(k) is not None), reverse=True)[:2]  # 미산정·참고 항목 제외
     if isinstance(total, (int, float)):
         reason = f"총점 {total:g}점. 점수가 높은 항목: {', '.join(_score_text(c, k) for _, k in best)}. 점수가 가장 낮은 항목: {_lowest(c)}."
     else:
