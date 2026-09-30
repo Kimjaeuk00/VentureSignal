@@ -160,7 +160,7 @@ def run(state: GraphState) -> dict:
     return evaluation_update(cid, competition=make_analysis(**accepted_result))
 
 
-# """테스트용 데이터"""
+"""테스트용 데이터 1"""
 # test_state: GraphState = {
 #     "query": "SK하이닉스 HBM 경쟁 제품 비교",
 #     "candidates": [
@@ -176,6 +176,69 @@ def run(state: GraphState) -> dict:
 #     ],
 #     "candidate_index": 1,
 #     "current_candidate": "SK_HYNIX",
+#     "evaluations": {},
+#     "selected_candidate": None,
+#     "report": None,
+# }
+"""테스트용 데이터 2"""
+# test_state: GraphState = {
+#     "query": "싸이닉솔루션 시스템반도체 디자인하우스 경쟁사 비교",
+#     "candidates": [
+#         {
+#             "company_id": "SYNIC_SOLUTION",
+#             "company_name": "싸이닉솔루션",
+#             "description": (
+#                 "팹리스 고객에게 반도체 설계 및 파운드리 연계 서비스를 제공하고, "
+#                 "ASIC 개발·양산과 시스템반도체 디자인 솔루션 사업을 수행하는 기업"
+#             ),
+#             "domain": "시스템반도체 디자인하우스 및 ASIC",
+#             "retrieval_score": 0.0,
+#         }
+#     ],
+#     "candidate_index": 1,
+#     "current_candidate": "SYNIC_SOLUTION",
+#     "evaluations": {},
+#     "selected_candidate": None,
+#     "report": None,
+# }
+"""테스트용 데이터 3"""
+# test_state: GraphState = {
+#     "query": "DEEPX 엣지 AI 반도체 경쟁 제품 비교",
+#     "candidates": [
+#         {
+#             "company_id": "DEEPX",
+#             "company_name": "DEEPX",
+#             "description": (
+#                 "엣지 기기에서 AI 추론을 수행하는 저전력 NPU를 개발하는 기업. "
+#                 "DX-M1 등 AI 가속 칩과 모듈을 제공한다."
+#             ),
+#             "domain": "엣지 AI 추론용 NPU 및 AI 가속기",
+#             "retrieval_score": 0.0,
+#         }
+#     ],
+#     "candidate_index": 1,
+#     "current_candidate": "DEEPX",
+#     "evaluations": {},
+#     "selected_candidate": None,
+#     "report": None,
+# }
+"""테스트용 데이터 4"""
+# test_state: GraphState = {
+#     "query": "Panmnesia CXL 메모리 확장 솔루션 경쟁 제품 비교",
+#     "candidates": [
+#         {
+#             "company_id": "PANMNESIA",
+#             "company_name": "Panmnesia",
+#             "description": (
+#                 "데이터센터와 AI 인프라의 메모리 확장·공유를 위한 "
+#                 "CXL 컨트롤러 IP, 스위치 칩 및 연결 솔루션을 개발하는 기업"
+#             ),
+#             "domain": "CXL 기반 메모리 확장 및 데이터센터 인터커넥트",
+#             "retrieval_score": 0.0,
+#         }
+#     ],
+#     "candidate_index": 1,
+#     "current_candidate": "PANMNESIA",
 #     "evaluations": {},
 #     "selected_candidate": None,
 #     "report": None,
