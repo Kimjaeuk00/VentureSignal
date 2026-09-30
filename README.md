@@ -1,291 +1,163 @@
-# VentureSignal
+# AI Startup Investment Evaluation Agent (VentureSignal)
 
-반도체(저전력·고효율 AI 칩) 스타트업을 탐색·분석하고, 반도체 특화 Scorecard로 투자 여부(`INVEST`/`HOLD`)를 판단해 투자 보고서를 만드는 LangGraph 멀티 에이전트 RAG 시스템.
+본 프로젝트는 반도체(저전력·고효율 AI 칩) 스타트업에 대한 투자 가능성을 자동으로 평가하는 에이전트를 설계하고 구현한 실습 프로젝트입니다.
 
-> 울산캠퍼스 2반 2조 · 김상현, 김영준, 김재욱, 임예리, 황민진
-> 설계 기준 문서: `docs/RAG-Design_울산캠퍼스-2반_…md` (구현은 이 문서를 따릅니다)
+## Overview
 
----
+- Objective : 반도체 AI 스타트업의 기술력, 경쟁 우위, 시장성, 창업자, 실적 등을 기준으로 점수화해서 투자 적합성 분석
 
-## 1. 환경 세팅 (uv)
+- Method : LangGraph 멀티 에이전트, Agentic RAG(하이브리드 검색), 웹서치(Tavily)
 
-[uv](https://docs.astral.sh/uv/)로 가상환경과 패키지를 관리합니다. Python 3.11을 사용합니다.
+## Features
 
-```bash
-# uv 설치 (macOS)
-brew install uv
+- PDF 자료 기반 정보 추출: 「국내외 AI 반도체 기업 통합 RAG 조사자료」 150쪽(50개 기업, 기술·시장 공통 주제 각 15개, 출처 90개)을 페이지 단위(청크 140개)로 색인해 검색
+- 질의 조건(예: "국내", "상장사 제외")을 반영해 Top-3 후보 기업 탐색
+- RAG와 웹서치로 기술·시장·경쟁·창업자·실적을 분석하고, 결과마다 출처(출처 ID·URL)를 남기며 확인되지 않은 정보는 추정하지 않음
+- 분석과 채점 분리: 분석 에이전트는 근거만 수집하고, 투자 판단 에이전트만 Scorecard로 채점해 INVEST/HOLD 판정
+- 평가표 (Score Table 방식)
+    - 창업자(10%) - 분야 전문성, 이력
+    - 시장성(15%) - 시장 규모, 성장 가능성
+    - 제품/기술력(35%) - 성능, 완성도
+    - 경쟁 우위(25%) - 독점적 자산, 모방 난도
+    - 실적(10%) - 고객 확보, 매출
+    - 투자조건(5%) - 다음 라운드까지의 런웨이 확보 가능성
+    - 투자 여부를 판단하는 기준점은 실제 IPO에 성공한 기업의 점수
+- 반도체 특화 Scorecard: 기술 복잡도가 높고, 설계 IP·공정 노하우 등 진입장벽이 높아 확보한 우위가 오래 유지되는 특성을 반영해 기술력(15→35%)·경쟁 우위(10→25%) 비중 상향
+- HOLD면 다음 후보로 반복하고, 최종 결과를 SUMMARY~REFERENCE 양식의 투자 보고서로 생성
 
-# 프로젝트 루트에서 가상환경 생성 + 패키지 설치
-uv venv -p 3.11 .venv
-uv pip install -p .venv -r requirements.txt
+## Architecture
 
-# 가상환경 활성화
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
+```mermaid
+flowchart TD
+    START([START]) --> SEARCH[스타트업 탐색]
+    SEARCH -- 후보 있음 --> SELECT[후보 선택]
+    SEARCH -- 후보 없음 --> REPORT[보고서 생성]
+    SELECT --> TECH[기술 요약] --> MARKET[시장성 평가] --> COMP[경쟁사 비교] --> TEAM[창업자 및 실적] --> DECIDE[투자 판단]
+    DECIDE -- INVEST --> REPORT
+    DECIDE -- HOLD · 후보 남음 --> SELECT
+    DECIDE -- HOLD · 후보 소진 --> REPORT
+    REPORT --> END([END])
 ```
 
-활성화하지 않고 실행하려면 `uv run` 대신 `.venv/bin/python …`처럼 경로를 직접 써도 됩니다.
+State 흐름: `query` → `candidates`(Top-3) → `current_candidate` → `evaluations`(기업별 분석·점수 누적, 덮어쓰지 않고 병합) → `report` (INVEST 기업은 `selected_candidate`에 기록)
 
-| 상황 | 명령 |
-|---|---|
-| 패키지 추가 | `requirements.txt`에 버전 고정으로 한 줄 추가 → `uv pip install -p .venv -r requirements.txt` |
-| 환경 초기화 | `rm -rf .venv` 후 위 설치 과정 다시 실행 |
-| 설치된 목록 확인 | `uv pip list -p .venv` |
+## Tech Stack
 
-- 패키지 추가·버전 변경은 **팀원 모두의 환경에 영향**을 주므로, 팀에 공유한 뒤 반영합니다.
-- `.venv/`는 git에 올라가지 않습니다. 각자 만듭니다.
+- Framework : LangGraph 1.2.12, LangChain 1.4.3 (Python 3.11)
+- LLM/Generator : OpenAI gpt-6-luna (분석·요약·보고서 생성)
+- LLM/Judge : OpenAI gpt-6-luna (투자 판단 채점)
+- Retrieval : Qdrant 로컬 모드 (bge-m3 Dense + Sparse 하이브리드, RRF) - 탐색 평가 30건 중 평균 23.2건 통과 (Top-3가 모두 정답 후보 5곳 안, 5회 평균)
+- Embedding : BAAI/bge-m3 (오픈소스, MIT) — 한·영 혼용 문서 대응, Dense + Sparse 하이브리드를 한 모델로 지원, 최대 8,192 토큰, Multi-vector 확장성. 비교 후보 gte-multilingual-base보다 검색 품질을 우선해 선정
+- Web Search : Tavily
 
-### API 키 설정
+## Agents
 
-```bash
-cp .env.example .env
-```
+### 1. 스타트업 탐색 에이전트 (RAG)
 
-`.env`를 열어 채웁니다. (`.env`는 git에 올라가지 않습니다. 키를 코드나 채팅에 붙여넣지 마세요.)
+질의에서 조건을 추출하고, 사전 구축한 조사자료 인덱스를 하이브리드 검색·재정렬해 Top-3 후보 기업을 찾는다.
 
-| 변수 | 설명 |
-|---|---|
-| `LLM_PROVIDER` | `anthropic` 또는 `openai` |
-| `LLM_MODEL` | 예) `claude-opus-5-5` |
-| `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | 사용하는 제공자의 키 |
-| `TAVILY_API_KEY` | 웹서치용 (경쟁사 비교, 창업자 및 실적 에이전트) |
+- 사전 1회: `python -m rag.ingest`가 PDF를 페이지별로 읽어 메타데이터(회사, 기술/시장성, 국내/해외, 분야, 출처 번호)를 붙이고, bge-m3 의미 벡터(Dense, 1024차원)와 단어 벡터(Sparse, 전문용어 정확 일치)로 Qdrant에 저장 (출처 목록 10쪽은 별도 저장)
+- ① 조건 추출(`query_parser.py`): LLM이 질의에서 "국내", "상장사 제외" 같은 조건 추출 (LLM 실패 시 규칙 기반 폴백)
+- ② 검색(`retrieval.py`): 질의도 같은 방식으로 벡터화해 의미·단어 검색을 각각 수행하고, 두 순위표를 RRF로 결합
+- ③ 재정렬(`ranking.py`): 조건에 맞지 않는 회사를 제외하고, 분야·기술 용어가 일치하면 가점 → Top-3
+- 어기면 오답인 조건(상장 제외, 후기 투자 등)만 필터로 제거하고, 분야·용어 일치는 가점으로 반영 → 평가 30건 중 통과 8건(벡터 검색만) → 23~24건
+- 검색 대상은 회사당 기술 페이지 1장(총 50장)이라 결과가 곧 회사 목록이며, "국내" 요구 시 검색 전에 국내 회사 8곳만 남김
+- 기업 상태·탐색 태그는 PDF 본문에서 따로 읽어(`catalog.py`) 필터·점수에 사용하고, 상장·인수 기업은 질의가 비상장·독립을 요구할 때 제외
 
----
+### 2. 후보 선택 (함수)
 
-## 2. RAG 인덱스 만들기 (각자 1회)
+후보 목록에서 아직 평가하지 않은 후보 1곳을 꺼내 `current_candidate`로 지정하고 `candidate_index`를 1 증가시킨다.
 
-RAG 인덱스(`data/index/`)는 git에 올라가지 않으므로, **팀원마다 로컬에서 한 번 실행**해야 합니다.
+### 3. 기술 요약 에이전트 (RAG + 웹서치)
 
-```bash
-python -m rag.ingest
-```
+후보 기업의 기술을 조사자료(PDF) 검색 → 1차 요약 → 웹서치 보강 → 출처 검수 순서로 분석해, 근거가 확인된 내용만 `technology`로 정리한다.
 
-- 처음에 bge-m3 모델(약 2.3GB)을 내려받아 시간이 걸립니다.
-- 성공하면 `sources: 90`, `indexed pages: 140`이 출력됩니다.
-- RAG를 쓰는 에이전트(스타트업 탐색 · 기술 요약 · 시장성 평가)는 이게 있어야 동작합니다.
-- 인덱스 로직이나 PDF 파싱 규칙이 바뀌면 다시 실행합니다.
+- 후보 기업의 `company_id`로 조사자료(PDF)의 기업 기술 페이지를 조회하고, 기술 공통 주제를 하이브리드 검색(bge-m3 Dense + Sparse)으로 보강
+- 조사자료 기반 1차 요약으로 핵심 기술, 제품, 개발 단계, 성능·전력, 강점과 한계 정리
+- 조사자료만으로 파악하기 어려운 양산·고객, SDK, 벤치마크 정보는 웹서치로 찾아 2차 요약에서 보강
+- 출처 검수를 통해 실제 조회한 자료의 출처(source_id·URL)만 남기고, 출처 없는 수치와 검색 결과 본문에 없는 웹 수치는 제외
+- 공개 사실, 회사 주장, 분석을 구분하고 웹에서 가져온 내용은 `web`으로 남김
+- 미확인 정보는 추정하지 않고 추가 확인 항목(unverified)으로 분류하며, 근거가 없으면 근거 부족으로 반환
 
-RAG 사용법, 에이전트별 검색 범위, 규칙은 **[`rag/README.md`](rag/README.md)** 를 보세요.
+### 4. 시장성 평가 에이전트 (RAG + 필요 시 웹서치)
 
----
+기업별 시장성 자료와 시장 공통 자료로 먼저 분석하고, 정보가 부족할 때만 웹서치로 보완해 `market`으로 정리한다.
 
-## 3. 작업 방식 — 내 에이전트 폴더에서만 작업
+- RAG 검색 범위: 기업별 시장성 페이지(`company_market`)와 시장 공통 주제(`market_topic`)
+- 웹서치 대상: 시장 규모·성장 또는 고객 수요·도입 (기업당 목적별 최대 1회, 전체 최대 2회, 검색당 결과 3개)
+- 정리 항목: 목표 고객, 시장 규모(범위·연도·단위·출처), 성장 요인, 수익 구조, 도입 장벽
+- 성장 요인은 기업 매출 성장과 구분하며, 시장 성장만으로 기업 매출을 예측하지 않음
+- 시장 규모 등 확인하지 못한 정보는 미확인으로 별도 기록
 
-### 원칙
+### 5. 경쟁사 비교 에이전트 (웹서치)
 
-> **팀원 1명 = 에이전트 폴더 1개.** 내 폴더 안에서만 파일을 만들고 수정합니다.
+평가 기업 확인 → 웹 검색(최대 3회) → 경쟁 제품 비교 → 결과 제출 → 출처 URL 검증 순서로 진행하고, 검증을 통과한 결과만 `competition`으로 저장한다.
 
-| 폴더 | 노드 | 방식 | 담당자 |
-|---|---|---|---|
-| `agents/startup_search/` | 스타트업 탐색 | RAG | |
-| `agents/tech_summary/` | 기술 요약 | RAG | |
-| `agents/market_eval/` | 시장성 평가 | RAG | |
-| `agents/competitor_compare/` | 경쟁사 비교 | 웹서치 | |
-| `agents/founder_traction/` | 창업자 및 실적 | 웹서치 | |
-| `agents/investment_decision/` | 투자 판단 | LLM | |
-| `agents/report_writer/` | 보고서 생성 | LLM | |
-| `agents/candidate_select/` | 후보 선택 | 함수 (구현 완료) | |
+- 현재 평가 기업과 같은 고객 문제를 해결하는 경쟁 제품을 찾아 비교 (입력: `current_candidate`, `candidates`의 이름·설명·사업 분야)
+- Tavily 웹서치, 검색당 최대 5개 결과
+- 비교 항목: 제품의 용도·고객, 성능·전력, 가격·도입 조건, 강점·약점, 출처
+- 근거 URL과 경쟁 제품 출처 URL이 실제 검색 결과에 있는지 검증. 실패 시 수정 또는 재검색(`recursion_limit=24`)하고, 끝까지 통과하지 못하면 저장하지 않고 오류 발생
+- 비교 조건이 다르거나 확인되지 않은 정보는 우열로 단정하지 않고 별도 기록
+- 출력 `details`: 경쟁사별 제품 정보(`peer_products`), 비교 조건, 미확인 정보, 핵심 위험 (`evidence`는 검색 결과 URL)
 
-### 코드 충돌을 피하는 규칙
+### 6. 창업자 및 실적 에이전트 (웹서치)
 
-1. **내 폴더 밖은 수정하지 않습니다.** 다른 사람의 에이전트 폴더, `core/`, `graph/`, `rag/`, `tools/`, `requirements.txt`, `main.py`는 공용입니다. 수정이 필요하면 팀에 먼저 공유하고 한 사람이 반영합니다.
-2. **진입점 이름을 바꾸지 않습니다.** 각 폴더의 `node.py` 안 `run(state) -> dict`가 진입점이고, `graph/builder.py`가 이걸 불러옵니다. 함수 이름·시그니처·폴더 이름을 바꾸면 그래프가 깨집니다.
-3. **자기 필드만 반환합니다.** 분석 에이전트는 `evaluation_update(cid, technology=make_analysis(...))`처럼 자기 담당 필드만 돌려줍니다. 다른 노드의 결과와는 `merge_evaluations`가 알아서 합칩니다. (담당 필드는 각 `node.py` 상단 docstring에 적혀 있습니다.)
-4. **점수는 매기지 않습니다.** 분석 에이전트는 사실·근거·강점·위험요소만 채웁니다. 채점은 `investment_decision` 에이전트만 합니다.
-5. **출처를 남깁니다.** `evidence`에 출처(`S010` 같은 source_id 또는 웹 URL)를 반드시 넣습니다. 출처 없는 수치는 쓰지 않습니다.
-6. **내 폴더 안에서는 자유롭게 파일을 추가합니다.** 예: `prompts.py`(프롬프트), `schemas.py`(LLM 구조화 출력용 Pydantic 모델), 헬퍼 모듈.
-7. **테스트는 별도 파일로 만듭니다.** `tests/agents/test_<폴더명>.py`처럼 파일을 나눠 두면 충돌하지 않습니다. (`tests/test_state.py`, `test_graph.py`, `test_scoring.py`는 공용)
+창업자·실적·투자조건을 웹에서 조사해 `team`·`traction`·`deal_terms`로 정리한다.
 
-### 공용 도구
+- 기업명과 CEO 이름을 기반으로 창업자 및 공동창업자 정보 탐색
+- LinkedIn과 공식 웹 자료에서 학력, 경력, 전문성, 논문 및 제품 실행 경험 수집
+- 고객, PoC, 계약, 매출 및 상용화 실적 분석
+- 투자 유치 이력, 기업가치, 투자조건 및 런웨이 확인
+- 원문 인용 검증을 통해 근거가 확인된 사실만 분석 결과에 반영
+- 미확인 정보는 추정하지 않고 추가 확인 항목으로 분류
 
-```python
-from core.llm import get_llm                          # LLM (.env 로 OpenAI/Anthropic 전환)
-from core.state import evaluation_update, make_analysis
-from rag.retriever import search, get_company_pages   # RAG
-from rag.sources import format_source                 # "S010" → 서지정보
-from tools.web_search import web_search               # Tavily 웹검색
-```
+### 7. 투자 판단 에이전트 (LLM)
 
-### 내 노드 개발 순서
+6개 분석 결과를 받아 LLM이 항목별 점수(0~5)와 근거만 산출하고, 가중합·판정은 코드(`scoring.build_scorecard` / `scoring.decide`)로 계산한다.
 
-1. `agents/<내 폴더>/node.py` 상단 docstring에서 입력·출력을 확인합니다.
-2. `TODO`로 표시된 스텁을 실제 구현으로 바꿉니다. (프롬프트·스키마는 폴더 안 별도 파일로)
-3. `python main.py "국내 저전력 엣지 AI 칩"`으로 전체 그래프를 돌려봅니다. **아직 구현하지 않은 다른 노드는 스텁이 더미 결과를 채우므로**, 내 노드만 구현한 상태에서도 그래프가 끝까지 돕니다.
-4. 결과는 `outputs/`에 저장됩니다. (git에는 올라가지 않습니다.)
+- 입력: 현재 후보의 분석 결과 6개 (`technology`, `market`, `competition`, `team`, `traction`, `deal_terms`)
+- Scorecard 비중: 제품/기술력 35% · 경쟁 우위 25% · 시장성 15% · 창업자 10% · 실적 10% · 투자조건 5%
+- 가중합을 0~100점으로 환산해 70점 이상이면 INVEST, 미만이면 HOLD
+- INVEST면 `selected_candidate`에 기업 ID를 기록하고 보고서 생성으로 이동
+- HOLD이고 후보가 남으면 다음 후보로 반복, 후보가 소진되면 보고서 생성으로 이동
 
-자세한 규약은 [`agents/README.md`](agents/README.md)를 보세요.
+### 8. 보고서 생성 에이전트 (LLM)
 
----
+State 전체를 입력으로 설계 문서 E절 양식에 맞춘 마크다운 투자 보고서를 작성한다.
 
-## 4. 명령어 모음
+- 목차: SUMMARY → 사업 아이디어와 팀 → 실적·투자조건 → 시장·경쟁 → 기술력 → 리스크 → 종합 평가 → REFERENCE (양식: `agents/report_writer/template.md`)
+- `evidence`의 출처 ID·URL로 출처 번호를 만들고 REFERENCE에 서지정보 기재
+- 전 후보가 HOLD이면 보류 사유와 재검토 조건 포함
 
-```bash
-python main.py "질의"                                    # 전체 그래프 실행
-pytest                                                   # 전체 테스트
-pytest tests/test_graph.py::test_invest_stops_loop       # 단일 테스트
-python -m rag.ingest                                     # RAG 인덱스 (재)생성
-```
-
----
-
-## 5. 그래프 흐름
+## Directory Structure
 
 ```
-START → 스타트업 탐색 → 후보 선택 → [기술 요약 → 시장성 평가 → 경쟁사 비교 → 창업자 및 실적] → 투자 판단
-투자 판단 ─ INVEST ─────────────→ 보고서 생성 → END
-         ─ HOLD & 후보 남음 ─────→ 후보 선택 (루프)
-         ─ HOLD & 후보 소진 ─────→ 보고서 생성 (보류 사유 포함) → END
+VentureSignal/
+├── agents/                   # 에이전트별 폴더 (진입점: node.py 의 run(state))
+│   ├── startup_search/       # 스타트업 탐색 (RAG)
+│   ├── candidate_select/     # 후보 선택 (함수)
+│   ├── tech_summary/         # 기술 요약 (RAG + 웹)
+│   ├── market_eval/          # 시장성 평가 (RAG + 웹)
+│   ├── competitor_compare/   # 경쟁사 비교 (웹)
+│   ├── founder_traction/     # 창업자 및 실적 (웹)
+│   ├── investment_decision/  # 투자 판단 (LLM, scoring.py)
+│   └── report_writer/        # 보고서 생성 (LLM, template.md)
+├── core/                     # 공용 State·LLM·설정
+├── graph/                    # LangGraph 조립 (builder.py)
+├── rag/                      # PDF 파싱·임베딩·Qdrant·검색
+├── tools/                    # Tavily 웹검색
+├── data/                     # 조사자료 PDF (index/ 는 로컬 생성)
+├── docs/                     # 설계 문서
+├── tests/                    # pytest
+├── outputs/                  # 생성된 보고서
+├── main.py                   # 실행 진입점
+└── requirements.txt
 ```
 
-Scorecard 가중치: 기술 35% · 경쟁 우위 25% · 시장성 15% · 창업자 10% · 실적 10% · 투자조건 5%.
+## Contributors
 
-### State 데이터 흐름 예시 (HyperAccel, PDF 11~12쪽)
-
-질의 `"국내 LLM 전용 AI 반도체 IP"`에서 첫 후보 **HyperAccel(C03)** 이 평가되는 과정입니다. 분석 내용은 PDF 11~12쪽과 출처 `S006`·`S007`에서 가져왔고, 아래 표시는 구분해서 읽으세요.
-
-- **PDF에 있는 값:** 기업 설명, LPU IP 사양, 550억 원 Series A, 한계·확인 질문, 비교군
-- **설명용 더미 값:** 후보 2·3번, `retrieval_score`, 웹서치 결과(5·6번의 경쟁사·인물·고객·`example.com` URL·런웨이), Scorecard 점수 (실제 조사·채점 결과가 아님)
-
-각 노드는 **표에 적힌 필드만** 반환합니다. 필드 정의는 `core/state.py`를 보세요.
-
-> **분량 안내:** 아래 예시 데이터는 흐름을 보여주려고 **간략하게 줄인 것**입니다. 실제 구현에서는 이보다 **훨씬 길고 상세하게** 채워도 됩니다. 보고서(설계 문서 E절의 8개 섹션)를 쓸 때 근거가 많이 필요하므로, 중요하다고 판단되는 내용은 생략하지 말고 충분히 남기세요.
-> - `summary`, `strengths`, `risks`는 항목 수·문장 길이 제한이 없습니다. 보고서 문단으로 바로 쓸 수 있을 만큼 구체적으로 씁니다.
-> - `evidence`에는 사용한 출처를 빠짐없이 넣습니다. (보고서 REFERENCE의 재료가 됩니다)
-> - `details`에는 보고서 표를 채울 수 있는 값(수치·단위·측정 조건·날짜·출처 번호, 경쟁사 비교표, 인물 이력 등)을 구조화해서 넣습니다.
-> - 단, 길게 쓰더라도 **근거 없는 내용을 채우지 않습니다.** 확인하지 못한 값은 "미확인"으로 표시합니다.
-
-| # | 노드 | State에 채워지는 것 |
-|---|---|---|
-| 0 | START | `query="국내 LLM 전용 AI 반도체 IP"`, `candidates=[]`, `candidate_index=0`, `current_candidate=None`, `evaluations={}`, `selected_candidate=None`, `report=None` |
-| 1 | 스타트업 탐색 | `candidates=[C03 HyperAccel, C06 AiM Future, C04 Mobilint]` (11쪽 탐색 태그 "LLM 전용 반도체 IP, 국내 LPU 설계"에 매칭) |
-| 2 | 후보 선택 | `current_candidate="C03"`, `candidate_index=1` |
-| 3 | 기술 요약 | `evaluations["C03"]["technology"]` |
-| 4 | 시장성 평가 | `evaluations["C03"]["market"]` |
-| 5 | 경쟁사 비교 | `evaluations["C03"]["competition"]` |
-| 6 | 창업자 및 실적 | `evaluations["C03"]["team"]`, `["traction"]`, `["deal_terms"]` |
-| 7 | 투자 판단 | `evaluations["C03"]["scorecard"]`, `["decision"]="HOLD"` |
-| 8 | (분기) | `HOLD`이고 `candidate_index(1) < len(candidates)(3)` → 2번으로 돌아가 `C06`을 평가. INVEST가 나오면 `selected_candidate`를 채우고 보고서로 이동 |
-
-**1번 `candidates` 한 칸**
-
-```python
-{
-    "company_id": "C03",
-    "company_name": "HyperAccel",
-    "description": "LLM 전용 프로세서 LPU 기술을 개발하는 국내 AI 반도체 IP 기업",
-    "domain": "AI 반도체 IP",              # 11쪽 헤더: C03 | 국내 | AI 반도체 IP
-    "retrieval_score": 0.83,              # 설명용
-}
-```
-
-**3번 기술 요약 (RAG, 11쪽)**: 수치는 `source_id`가 있는 것만, 조건과 함께 적습니다.
-
-```python
-{
-    "summary": "LPU IP는 메모리·연산 구성을 조절하는 모듈형 설계와 PCIe·UCIe 통합을 제시한다 (회사 공개).",
-    "strengths": ["모듈형 설계로 고객 SoC에 맞춰 구성 조절 가능", "LLM 전용 구조(LPU)"],
-    "risks": [
-        "공개 수치는 코어 단위 예시라 완성 카드·서버 수치와 직접 비교 불가",
-        "독립 실측 없음 (제품 페이지의 공개 주장)",
-        "LPU 명칭은 업체별로 의미가 달라 company_id와 함께 색인 필요",
-    ],
-    "evidence": ["S006"],
-    "details": {
-        "product": "LPU IP",
-        "core_examples": [
-            {"type": "latency 지향", "tflops_fp16": 8, "power_w": 3.55},
-            {"type": "high-performance", "tflops": 12, "power_w": 4.72},
-        ],
-        "scope": "코어 단위 예시 (완성 카드·서버 수치 아님)",
-        "unverified": ["목표 공정·면적", "검증 조건", "완성 실리콘 측정값"],
-    },
-}
-```
-
-**4번 시장성 평가 (RAG, 12쪽)**
-
-```python
-{
-    "summary": "고객 SoC에 통합하려는 IP 수요와 추론 서버 수요를 나누어 평가할 수 있다 (분석).",
-    "strengths": ["LLM에 맞춘 IP를 SoC에 통합하려는 수요 존재 (분석)"],
-    "risks": [
-        "IP 사업은 설계 채택과 라이선스·양산 로열티 시점이 달라 매출 발생 구조 확인 필요",
-        "양산 일정·수율, 지원 모델, IP 라이선스 형태, 고객 설계 채택 여부 미확인",
-    ],
-    "evidence": ["S006", "S007"],
-    "details": {
-        "buyer_split": ["IP 구매자 (공정·검증·통합 일정 중심)", "서버 구매자 (처리량·서비스 비용·운영 지원 중심)"],
-        "open_questions": ["실제 유상 고객·반복 구매", "IP/서버 구매자 구분", "다음 세대로 모델·SDK 이전 가능 여부"],
-    },
-}
-```
-
-**5번 경쟁사 비교 (웹서치)**: 비교군은 PDF 12쪽 기준이고, 나머지는 웹서치를 했다고 가정한 **더미 값**입니다. 실제 구현에서는 `web_search()` 결과의 URL을 `evidence`에 남깁니다.
-
-```python
-{
-    "summary": "AiM Future, Synthara와 같은 AI 반도체 IP 범주에서 비교된다. LLM 전용 구조(LPU)가 차별점이나, 동등한 제품·성능 순위는 아니다.",
-    "strengths": ["LLM 추론에 특화된 모듈형 IP", "PCIe·UCIe 통합 지원"],
-    "risks": ["범용 NPU IP 업체가 LLM 지원을 확대할 가능성", "IP 코어 수치 기준이 업체마다 달라 직접 비교가 어렵다"],
-    "evidence": ["S006", "https://example.com/dummy/edge-npu-ip-comparison"],   # 더미 URL
-    "details": {
-        "peer_group": ["AiM Future", "Synthara"],
-        "compare_axes": ["PPA", "통합 기간", "지원 연산"],
-        "comparison": [                                                        # 보고서 4절 비교표용 (더미)
-            {"company": "HyperAccel", "product": "LPU IP", "target": "LLM 추론 SoC", "strength": "LLM 전용 구조", "weakness": "완성 실리콘 검증 미공개"},
-            {"company": "AiM Future", "product": "NeuroMosAIc", "target": "엣지 AI SoC", "strength": "다양한 모델 지원", "weakness": "LLM 특화 근거 부족"},
-        ],
-    },
-}
-```
-
-**6번 창업자 및 실적 (웹서치)**: 아래 인물·고객·런웨이는 **모두 더미 값**입니다. 실제 구현에서는 웹서치 결과로 채우고, 못 찾은 항목만 "미확인"으로 남깁니다.
-
-```python
-"team": make_analysis(
-    summary="창업팀은 반도체 설계와 AI 모델 서비스 경험을 함께 가진 구성 (더미)",
-    strengths=["칩 설계 경력 보유 (더미)", "LLM 서비스 경험 보유 (더미)"],
-    risks=["칩 양산 경험 인력 규모 불명 (더미)"],
-    evidence=["https://example.com/dummy/hyperaccel-team"],
-    details={"members": [{"name": "홍길동", "role": "CEO", "career": "반도체 설계 10년+"}]},   # 더미
-),
-"traction": make_analysis(
-    summary="시험 도입 단계 고객이 있으나 반복 주문·매출은 공개 자료에서 확인되지 않음 (더미)",
-    strengths=["SoC 설계사 대상 PoC 진행 (더미)"],
-    risks=["투자 발표의 미래 생산 계획을 달성한 실적으로 저장하지 않는다"],
-    evidence=["https://example.com/dummy/hyperaccel-customers"],
-    details={"customers": [{"name": "더미 고객사", "stage": "PoC"}], "revenue": "비공개"},
-),
-"deal_terms": make_analysis(
-    summary="2025년 550억 원 Series A 유치 발표 (회사 공개, 연도 수준으로 기록). 다음 라운드까지의 런웨이는 약 2년으로 추정 (더미)",
-    strengths=["대규모 시리즈 A로 개발 자금 확보"],
-    risks=["페이지 날짜와 본문 발표일 표현이 일치하는지 불명확", "현재 법인·자본 상태는 별도 확인 필요"],
-    evidence=["S007", "https://example.com/dummy/hyperaccel-funding"],
-    details={"round": "Series A", "amount_krw": 55_000_000_000, "year": 2025, "runway_months": 24},   # runway 는 더미
-),
-```
-
-**7번 투자 판단 후 `evaluations["C03"]`** (병합 결과)
-
-```python
-{
-    "technology": {...}, "market": {...}, "competition": {...},   # 3~5번
-    "team": {...}, "traction": {...}, "deal_terms": {...},        # 6번
-    "scorecard": {                       # 설명용 점수: 항목별 0~5 + 가중합(0~100)
-        "technology": 3, "competition": 3, "market": 3,
-        "team": 2, "traction": 1, "deal_terms": 3,
-        "total_score": 54.0,             # 임계값(70) 미만
-    },
-    "decision": "HOLD",
-}
-```
-
-핵심 규칙:
-- 3~6번 노드는 서로의 결과를 덮어쓰지 않습니다. `merge_evaluations`가 `company_id`별로 필드를 합칩니다.
-- 채점(`scorecard`, `decision`)은 7번 투자 판단 노드만 합니다.
-- 분석 노드는 점수 없이 사실·근거·위험요소만 담습니다. 이 예시는 흐름을 보여주려고 5·6번을 더미로 채웠지만, **실제 구현에서는 확인하지 못한 값을 만들어 채우지 않고 "미확인"으로 남깁니다.** (PDF 12쪽: 실적 결과가 없으면 값을 만들어 평가 점수를 채우지 않음)
-- 전 후보가 HOLD여도 `selected_candidate`는 `None`인 채로 보고서(보류 사유 포함)로 갑니다.
-
-## 6. 팀에서 정해야 할 것
-
-- **`INVEST_THRESHOLD`** (`core/config.py`, 현재 70): 설계 문서에 없는 임시값입니다. 합의가 필요합니다.
-- **RAG 검색 품질:** 기본 수준입니다. 개선 방향은 `rag/README.md`의 "알려진 한계"를 보세요.
+- 임예리 : 스타트업 탐색 에이전트 (질의 조건 추출, 하이브리드 검색·RRF 결합, 조건 필터·재정렬)
+- 김상현 : 기술 요약 에이전트 (RAG 기술 분석, 웹 보강, 출처 검수)
+- 김영준 : 시장성 평가 에이전트 (RAG 시장 분석, 필요 시 웹 보완, 시장 규모·성장 요인 정리)
+- 김재욱 : 경쟁사 비교 에이전트 (웹서치 경쟁 제품 비교, 출처 URL 검증)
+- 황민진 : 창업자 및 실적 에이전트 (창업자 이력·실적·투자조건 조사, 원문 인용 검증)
