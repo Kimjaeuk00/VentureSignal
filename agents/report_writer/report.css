@@ -1,0 +1,212 @@
+/* VentureSignal — 보고서 PDF 스타일 (Notion 톤 · 회색 + 빨강)
+   docs/pdf-style.css 와 같은 서식이다. 보고서 생성 에이전트가 마크다운 → HTML → Chromium 으로 PDF 를 만들 때 쓴다. */
+
+:root {
+  --text: #37352F;
+  --muted: #787774;
+  --faint: #9B9A97;
+  --line: #E9E9E7;
+  --bg-gray: #F7F6F3;
+  --bg-gray-strong: #F1F1EF;
+  --red: #D44C47;
+  --red-dark: #9F2F2D;
+  --bg-red: #FDEBEC;
+}
+
+@page {
+  size: A4;
+}
+
+html {
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Pretendard", "Noto Sans KR", "Noto Sans CJK KR", "Malgun Gothic", "Segoe UI", sans-serif;
+  font-size: 9pt;
+  line-height: 1.65;
+  color: var(--text);
+  background: #FFFFFF;
+  padding: 0 4px;
+  word-break: keep-all;
+  overflow-wrap: break-word;
+}
+
+/* ---------- Headings ---------- */
+
+h1, h2, h3, h4 {
+  color: var(--text);
+  font-weight: 700;
+  line-height: 1.35;
+  page-break-after: avoid;
+  break-after: avoid;
+}
+
+h1 {
+  font-size: 21pt;
+  letter-spacing: -0.02em;
+  margin: 0 0 6px;
+  padding-bottom: 10px;
+  border-bottom: 3px solid var(--red);
+}
+
+h2 {
+  font-size: 14pt;
+  margin: 36px 0 14px;
+  padding: 6px 0 6px 12px;
+  border-left: 4px solid var(--red);
+  background: var(--bg-gray);
+  border-radius: 0 4px 4px 0;
+}
+
+h3 {
+  font-size: 12pt;
+  margin: 26px 0 10px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--line);
+}
+
+h4 {
+  font-size: 10.5pt;
+  margin: 20px 0 8px;
+  color: var(--red-dark);
+}
+
+p { margin: 6px 0 10px; }
+
+strong { color: var(--text); font-weight: 700; }
+
+a { color: var(--red); text-decoration: none; border-bottom: 1px solid rgba(212, 76, 71, 0.35); }
+
+hr {
+  border: none;
+  border-top: 1px solid var(--line);
+  margin: 28px 0;
+}
+
+ul, ol { padding-left: 22px; margin: 6px 0 12px; }
+li { margin: 3px 0; }
+li::marker { color: var(--faint); }
+
+/* ---------- Callout (blockquote) ---------- */
+
+blockquote {
+  margin: 12px 0;
+  padding: 10px 14px;
+  background: var(--bg-gray);
+  border: none;
+  border-left: 3px solid var(--red);
+  border-radius: 0 6px 6px 0;
+  color: var(--text);
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+
+blockquote p { margin: 2px 0; }
+
+/* ---------- Tables ---------- */
+
+table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  margin: 10px 0 16px;
+  font-size: 8pt;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+thead { display: table-header-group; }
+
+tr { page-break-inside: avoid; break-inside: avoid; }
+
+th {
+  background: var(--bg-gray-strong);
+  color: var(--muted);
+  font-weight: 600;
+  text-align: left;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+}
+
+td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+  vertical-align: top;
+}
+
+th:last-child, td:last-child { border-right: none; }
+
+/* 첫 열(항목·노드·필드명)은 줄바꿈 없이 한 줄로 */
+th:first-child, td:first-child { white-space: nowrap; }
+tr:last-child td { border-bottom: none; }
+
+/* 합계처럼 굵게 쓴 행 강조 */
+td strong { color: var(--text); }
+
+/* ---------- Code ---------- */
+
+code {
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.88em;
+}
+
+:not(pre) > code {
+  color: var(--red);
+  background: rgba(135, 131, 120, 0.15);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+pre {
+  background: var(--bg-gray);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 12px 14px;
+  white-space: pre-wrap;
+  page-break-inside: avoid;
+}
+
+pre code { color: var(--text); background: none; padding: 0; }
+
+/* ---------- Mermaid ---------- */
+
+.mermaid {
+  display: flex;
+  justify-content: center;
+  margin: 14px 0;
+  padding: 16px 8px;
+  background: #FFFFFF;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+
+/* 본문 스타일이 그래프 글자 폭 계산에 끼어들지 않도록 초기화 */
+.mermaid, .mermaid * {
+  word-break: normal;
+  letter-spacing: normal;
+  line-height: normal;
+}
+
+.mermaid p { margin: 0; }
+
+.mermaid svg {
+  overflow: visible;
+  max-width: 100% !important;
+  max-height: 880px;
+  height: auto;
+}
+
+/* ---------- Misc ---------- */
+
+.emoji { height: 1.1em; vertical-align: -0.15em; }
+
+img { max-width: 100%; }
+
+.page { page-break-after: always; }
