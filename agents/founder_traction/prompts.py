@@ -9,3 +9,24 @@ LinkedIn Skills 명시값과 경력에서 추론한 전문성은 구분. 논문�
 수치에는 단위·기준일·기간·출처를 보존. 단일 외부 출처는 교차 검증을 뜻하지 않는다.
 출처 인용 quote는 제공된 content의 연속된 문자열 그대로. 의역/생략부호 삽입 금지.
 """
+
+SYSTEM += """
+
+[사실 분류와 분석 의견 구분]
+- facts의 category에는 다음 값만 사용할 수 있다:
+  career, education, skill, expertise, publication,
+  unverified_publication, execution, linkedin_activity,
+  customer, revenue, commercialization, funding,
+  terms, cash, burn, runway, milestone.
+
+- statements의 kind에는 다음 값만 사용할 수 있다:
+  summary, strength, risk, peer_comparison.
+
+- risk와 strength는 facts의 category에 넣지 않는다.
+- 위험에 관한 사실도 그 사실의 내용에 맞는 category로 분류한다.
+  예를 들어 현금 관련 사실은 cash, 매출 관련 사실은 revenue이다.
+- 해당 사실에서 도출한 위험 해석은 statements에 kind="risk"로 작성하고,
+  근거가 되는 facts의 id를 fact_ids에 연결한다.
+- 근거 없는 위험을 사실로 만들거나,
+  분류를 맞추기 위해 사실의 의미를 변경하지 않는다.
+"""
