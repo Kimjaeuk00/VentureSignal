@@ -9,7 +9,7 @@
 | `node.py` | LangGraph 진입점 `run(state) -> dict` |
 | `agent.py` | 검색·수집·분석·검토 단계 오케스트레이션 |
 | `schemas.py` | LLM 구조화 출력용 Pydantic 모델 |
-| `prompts.py` | 공통 시스템 프롬프트 |
+| (루트 `prompts/founder_traction.py`) | 시스템·초안·검토·탐색 프롬프트 |
 | `settings.py` | 버전, 영역별 설정, 실행 설정값 |
 | `web_research.py` | Tavily 검색 연결, 페이지 추출, LinkedIn URL 정규화 |
 | `source_collection.py` | 검색 결과 변환, 페이지 원문 청크화와 수집 상태 기록 |

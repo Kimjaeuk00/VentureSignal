@@ -25,7 +25,7 @@
 
 ## 폴더 안에서 자유롭게 추가해도 되는 것
 
-- `prompts.py` — 프롬프트 문자열
+- 프롬프트 문자열은 루트 `prompts/<에이전트>.py` 에 둔다 (노드는 `from prompts.<에이전트> import ...`)
 - `schemas.py` — LLM 구조화 출력용 Pydantic 모델 (`get_llm().with_structured_output(...)`)
 - 기타 헬퍼 모듈
 

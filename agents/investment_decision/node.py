@@ -40,7 +40,11 @@ from core.sources import SourceBook
 from core.state import GraphState, evaluation_update
 
 from .fixed_baseline import load_fixed_baseline
-from .prompts import INVESTMENT_SYSTEM_PROMPT, INVESTMENT_USER_PROMPT
+from prompts.investment_decision import (
+    INVESTMENT_SYSTEM_PROMPT,
+    INVESTMENT_USER_PROMPT,
+    TEMPORAL_INSTRUCTION,
+)
 from .schemas import InvestmentAssessment
 from .scoring import REQUIRED_CRITERIA, build_core_scorecard, decide
 
@@ -484,20 +488,7 @@ def assess(state: GraphState) -> dict:
         )
     }
 
-    temporal_instruction = f"""
-[이번 평가의 기준일]
-- 평가 기준일은 {as_of}입니다.
-- 채점 기준에서 '현재'는 위 평가 기준일을 의미합니다.
-- 과거 기준 평가에서는 기준일 이후에 발표되거나 달성된 정보를
-  당시의 채점 근거로 사용하지 않습니다.
-- 당시 공개된 전망은 전망으로만 다루며 달성 실적으로 바꾸지 않습니다.
-- 현금, 현금 소진액, 경영진, 고객 관계는 해당 기준일에 적용 가능한
-  근거인지 확인합니다.
-- 입력 자료가 기준일에 적용 가능한지 불명확하면 추측하지 말고
-  missing_information에 기록합니다.
-- 기업의 실제 사업 영역에 맞춰 같은 채점 원칙을 적용합니다.
-  모든 기업에 NPU 성능이나 자체 칩 양산을 일률적으로 요구하지 않습니다.
-"""
+    temporal_instruction = TEMPORAL_INSTRUCTION.format(as_of=as_of)
 
     # LLM 에게는 URL 대신 출처 번호(U1…)를 보여 준다. RAG 출처 ID(S006)는 그대로 둔다.
     book = SourceBook(rag_ids={s for s in allowed_sources if not s.startswith(("https://", "http://"))})

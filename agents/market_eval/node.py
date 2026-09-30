@@ -24,7 +24,7 @@ from core.state import GraphState, evaluation_update, make_analysis
 from rag.retriever import get_company_pages, search
 from tools.web_search import web_search
 
-from .prompts import MARKET_SYSTEM_PROMPT, MARKET_USER_PROMPT
+from prompts.market_eval import MARKET_SYSTEM_PROMPT, MARKET_USER_PROMPT
 from .schemas import MarketAnalysis, MarketSearchQuery
 
 

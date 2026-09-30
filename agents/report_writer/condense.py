@@ -17,7 +17,7 @@ from langsmith import traceable
 
 from . import llm_writer
 from .document import Document, Paragraph, Table
-from .prompts import CONDENSE_SYSTEM
+from prompts.report_writer import CONDENSE_SYSTEM
 from .schemas import CondensedCells
 from .textutil import brief
 

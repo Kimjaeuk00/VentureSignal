@@ -21,7 +21,14 @@ from .analysis_helpers import (
     estimate_runway,
     valid_evidence,
 )
-from .prompts import SYSTEM
+from prompts.founder_traction import (
+    DISCOVER_INSTRUCTION,
+    DRAFT_DETAIL,
+    DRAFT_INSTRUCTION,
+    RESOLVE_INSTRUCTION,
+    REVIEW_INSTRUCTION,
+    SYSTEM,
+)
 from .schemas import Discovery, Draft, Fact, Review
 from .settings import AgentConfig, SECTIONS, VERSION
 from .source_collection import build_sources, collect_pages
@@ -76,25 +83,9 @@ class FounderPerformanceAgent:
             return make_analysis(summary="확인 가능한 자료를 확보하지 못했습니다.",
                                  risks=["추가 자료 확인 필요"], details={"facts": [], "status": "no_sources"})
         draft = self._ask(Draft,
-            f"{section}: {SECTIONS[section]}을 분석. fact id와 statement id는 각각 고유하게. "
-            "각 사실은 원문 evidence 필수. statements는 사실 id를 참조하며 요약/강점/위험/피어비교 작성. "
-            "분석 범위 밖 사실은 제외. 기업 본인과 피어 사실은 subject로 구분. "
-            "team은 page_extract 중 확인된 LinkedIn 프로필 본문을 우선 읽어 "
-            "Experience/Education/Skills/Publications를 정리하고 전문성/실행 경험을 분석. "
-            "검색 발췌만 확보했다면 프로필 본문을 읽었다고 말하지 말라. "
-            "프로필에 없는 논문·경력은 공식 약력/학술 자료로 보완하고 각각 출처를 구분. "
-            "논문 전체 목록이나 전체 팀이라고 단정 금지. 피어 우열은 비교 가능한 양측 fact가 있을 때만. "
-            "런웨이는 출처가 명시한 기준일 추정만 수집하고 현재 런웨이로 단정 금지. "
-            "unverified_publication은 역량 평가의 근거로 사용 금지. "
-            "같은 사실은 한 번만 기록하고 불확실한 속성만 생략하라.",
+            DRAFT_INSTRUCTION.format(section=section, scope=SECTIONS[section]),
             {"context": context, "sources": list(sources.values()),
-             "instruction_detail": "LinkedIn 페이지의 전체 수집 본문을 여러 page_extract chunk로 제공한다. "
-             "모든 chunk를 검토하고 각 Experience/Education/Skills/Publication 항목과 "
-             "창업자가 직접 작성/공유한 중요한 게시물·발표·기술 의견·제품 시연·협업/고객 반응을 "
-             "각각 linkedin_activity fact로 추출한다. 게시물 날짜·유형·주제를 attributes에 둔다. "
-             "게시물 본문을 과도하게 합쳐 누락하지 말고 의미 단위별 사실을 기록한다. "
-             "타인이 작성한 댓글/게시물은 CEO 성과로 귀속 금지. 회사 계정 게시물은 CEO 개인 활동과 구분. "
-             "원문에서 확인 가능한 항목은 누락 없이 추출하되 반복/광고성 문구는 요약하고 원문 evidence 유지."})
+             "instruction_detail": DRAFT_DETAIL})
         # Validate locally before one semantic review. Never discard a whole section.
         facts, seen = [], set()
         for f in draft.facts:
@@ -104,12 +95,7 @@ class FounderPerformanceAgent:
         valid_ids = {f.id for f in facts if f.category != "unverified_publication"}
         statements = [s for s in draft.statements if s.fact_ids and set(s.fact_ids) <= valid_ids]
         review = self._ask(Review,
-            "항목별 근거 검증. 인용이 사실과 모든 속성을 지지하고 인물/기업 귀속이 맞는 fact id만 승인. "
-            "논문 confirmed 역할인 publication은 이름 외 동일인 연결 근거를 요구. "
-            "중복 사실은 하나만 승인. 오류가 있는 항목만 거절하고 정상 항목은 유지. "
-            "statements는 승인 사실로 뒷받침되는 추론/서술만 승인. 피어 우열에는 양측 비교 근거 필요. "
-            "출처가 외부라는 것과 여러 독립 출처로 교차 검증됐다는 것을 혼동하지 말라. "
-            "거절 이유는 reasons에 간결하게 작성. 원문 인용이 있다는 이유만으로 승인하지 말라.",
+            REVIEW_INSTRUCTION,
             {"context": context, "facts": [f.model_dump() for f in facts],
              "statements": [s.model_dump() for s in statements], "sources": list(sources.values())})
         facts = [f for f in facts if f.id in review.accepted_fact_ids]
@@ -166,10 +152,7 @@ class FounderPerformanceAgent:
         initial = sum(self._search([f'"{name}" CEO leadership official biography',
                                     f'"{name}" 대표이사 창업자 이름']), [])
         found = self._ask(Discovery,
-            "현재 CEO/대표이사 이름을 우선 식별하고 확인된 창업자도 포함. "
-            "CEO라는 이유로 창업자라고 쓰지 말고 role에 실제 역할을 구분. CEO를 먼저 정렬. "
-            "한글/영문 별칭은 출처에 있는 것만. 이 단계 linkedin_url은 null. "
-            "이름·역할의 원문 evidence 필수. 과거 CEO와 현재 CEO를 구분.",
+            DISCOVER_INSTRUCTION,
             {"company": company, "sources": initial}) if initial else Discovery()
         available = {d["source_id"]: d for d in initial}
         founders, names = [], set()
@@ -187,10 +170,7 @@ class FounderPerformanceAgent:
             observed = {profile_url(u) for d in profile_hits for u in [d["url"]] +
                         re.findall(r'https?://[^\s<>"\)]+', d["content"])} - {None}
             resolved = self._ask(Discovery,
-                "주어진 CEO/창업자 각각의 LinkedIn 본인 프로필 URL만 선택. "
-                "observed_urls 중 이름과 회사/경력이 연결되는 /in/ 주소만 허용. "
-                "다른 직원/동명이인 제외. 입력 name을 그대로 유지. 연결 근거 evidence 필수. "
-                "확인 불가하면 linkedin_url=null.",
+                RESOLVE_INSTRUCTION,
                 {"company": company, "people": [f.model_dump() for f in founders],
                  "observed_urls": sorted(observed), "sources": profile_hits})
             source_map = {d["source_id"]: d for d in profile_hits}

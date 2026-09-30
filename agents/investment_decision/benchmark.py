@@ -1,6 +1,6 @@
-"""기준 기업 5곳의 최초 평가.
+"""기준 기업 3곳의 최초 평가.
 
-- 후보 탐색과 투자 판정 없이 기준 기업 5곳을 모두 분석한다.
+- 후보 탐색과 투자 판정 없이 기준 기업 3곳을 모두 분석한다.
 - 후보 기업과 동일한 assess() 함수로 채점한다.
 - 결과는 팀 검토용 JSON으로 저장한다.
 - fixed_baseline.py의 확정 점수를 자동으로 변경하지 않는다.
@@ -9,6 +9,7 @@
 import argparse
 import importlib
 import json
+import statistics
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -43,25 +44,11 @@ REFERENCE_COMPANIES = [
         "as_of": "2023-11-24",
     },
     {
-        "company_id": "C40",
-        "company_name": "Blaize",
-        "description": "엣지 AI 프로세서와 소프트웨어 플랫폼 기업",
-        "domain": "엣지 AI 프로세서",
-        "as_of": "2025-01-14",
-    },
-    {
         "company_id": "BENCH_AMBIQ",
         "company_name": "Ambiq",
         "description": "초저전력 MCU와 엣지 AI 처리 솔루션 기업",
         "domain": "초저전력 MCU 및 엣지 AI",
         "as_of": "2025-07-30",
-    },
-    {
-        "company_id": "C49",
-        "company_name": "Moore Threads",
-        "description": "GPU와 AI·HPC 소프트웨어 플랫폼 기업",
-        "domain": "AI 및 HPC GPU",
-        "as_of": "2025-12-05",
     },
 ]
 
@@ -155,7 +142,7 @@ def _apply_analysis(
 
 
 def _calculate_lower_bound(companies: list[dict]) -> float | None:
-    """5곳 모두 채점됐을 때만 최저 총점을 반환한다."""
+    """기준 기업 3곳이 모두 채점됐을 때만 핵심 점수의 평균을 반환한다(fixed_baseline 과 같은 규칙)."""
     expected_ids = {
         company["company_id"]
         for company in REFERENCE_COMPANIES
@@ -193,7 +180,7 @@ def _calculate_lower_bound(companies: list[dict]) -> float | None:
 
         totals.append(recalculated["total_score"])
 
-    return min(totals)
+    return round(statistics.mean(totals), 1)
 
 
 def build_reference_scores() -> dict:

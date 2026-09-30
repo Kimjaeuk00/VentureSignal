@@ -21,7 +21,7 @@ from core.llm import get_llm
 
 from .collect import ITEM_LABEL, ITEM_ORDER, MISSING, REFERENCE_ITEMS, CandidateData, ReportContext, get, missing_labels
 from .fallback import SCORE_MAX, hold_prose, invest_prose
-from .prompts import HOLD_SYSTEM, INVEST_SYSTEM
+from prompts.report_writer import HOLD_SYSTEM, INVEST_SYSTEM
 from .schemas import CompanyHoldProse, HoldProse, InvestProse
 
 logger = logging.getLogger(__name__)

@@ -17,7 +17,7 @@
 import re
 from datetime import date
 
-from agents.tech_summary.prompts import HUMAN_PROMPT, SYSTEM_PROMPT, WEB_PROMPT
+from prompts.tech_summary import HUMAN_PROMPT, SYSTEM_PROMPT, WEB_PROMPT
 from agents.tech_summary.schemas import TechSummaryOutput
 from core.llm import get_llm
 from core.state import GraphState, evaluation_update, make_analysis

@@ -12,7 +12,7 @@ from langsmith import traceable
 from core.llm import get_llm
 
 from .catalog import get_categories
-from .prompts import CONDITION_SYSTEM_PROMPT
+from prompts.startup_search import CONDITION_SYSTEM_PROMPT
 from .schemas import SearchConditions
 
 # 연산 칩 category (질의가 "NPU 제외"처럼 연산 칩 전반을 뺄 때)

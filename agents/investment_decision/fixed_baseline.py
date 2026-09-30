@@ -1,24 +1,30 @@
-"""팀에서 확정한 기준 기업 점수.
+"""팀에서 확정한 기준 기업 점수와 하한값.
 
 - 검색이나 LLM을 호출하지 않는다.
 - 기준 기업을 다시 평가하지 않는다.
-- 확정한 항목별 점수로 총점을 계산하고 고정 하한값과 대조한다.
+- 확정한 항목별 점수로 핵심 점수를 계산하고, 그 평균을 고정 하한값과 대조한다.
 - 기준을 변경할 때는 팀 검토 후 버전을 올린다.
+
+하한값 규칙 (v3, 2026-09-30 확정): 산정된 기준 기업 핵심 점수의 **평균**(소수 첫째 자리 반올림). 설계 문서의 최저값 방식과 다르다.
+핵심 점수는 후보와 같은 규칙이다: 필수 5항목의 가중합 ÷ 95% × 100, 투자조건은 참고라 제외.
+산정 과정과 근거는 docs/기준기업_3종_점수산정.md 에 있다.
 """
 
+import statistics
 from datetime import date
 
 from core.config import SCORE_MAX, SCORECARD_WEIGHTS
 from .scoring import REQUIRED_CRITERIA, build_core_scorecard
 
 
-BASELINE_VERSION = "v1"
+# v1: 최저값 방식(기준 점수 미확정) → v3: 기준 기업 3곳 핵심 점수(투자조건 제외)의 평균
+BASELINE_VERSION = "v3"
 
-# 팀에서 기준 점수를 확정한 날짜. 예: "2026-09-30"
-CONFIRMED_AT: str | None = None
+# 팀에서 기준 점수를 확정한 날짜.
+CONFIRMED_AT: str | None = "2026-09-30"
 
-# 기준 기업 5곳의 확정 총점 중 최솟값을 입력한다.
-FIXED_LOWER_BOUND: float | None = None
+# 기준 기업 3곳 핵심 점수의 평균 (싸이닉솔루션 57.9, 그린리소스 60.0, Ambiq 60.0 → 59.3).
+FIXED_LOWER_BOUND: float | None = 59.3
 
 # 기준 점수를 산정할 때 사용한 가중치와 점수 범위.
 BASELINE_WEIGHTS = {
@@ -32,77 +38,28 @@ BASELINE_WEIGHTS = {
 
 BASELINE_SCORE_MAX = 5
 
-# 기준 기업은 상장 시점을 기준으로 평가한다.
-EVALUATION_BASIS = "listing_date"
+# 기술력·시장성·경쟁 우위는 상장일 기준 자료(PDF)를, 창업자·실적·경쟁사 비교 등 웹 검색분은 산정 시점(2026-09-30)의 정보를 썼다.
+EVALUATION_BASIS = "listing_date_pdf_plus_web_at_scoring"
 
-# None을 실제 평가 결과로 교체한다.
-# as_of에는 해당 평가에 실제 적용한 기준일을 입력한다.
-# scores에는 0~5 범위의 확정된 항목별 점수를 입력한다.
+# as_of: 평가 기준일(상장일). scores: 채점 3회의 항목별 중앙값(0~5 정수, 미산정은 None). 투자조건은 참고 항목이라 총점에 쓰지 않는다.
 REFERENCE_COMPANIES = [
     {
         "company_id": "BENCH_SCINIC",
         "company_name": "싸이닉솔루션",
-        "as_of": None,
-        "scores": {
-            "technology": None,
-            "competition": None,
-            "market": None,
-            "team": None,
-            "traction": None,
-            "deal_terms": None,
-        },
+        "as_of": "2025-07-07",
+        "scores": {"technology": 3, "competition": 3, "market": 3, "team": 2, "traction": 3, "deal_terms": None},
     },
     {
         "company_id": "BENCH_GREEN",
         "company_name": "그린리소스",
-        "as_of": None,
-        "scores": {
-            "technology": None,
-            "competition": None,
-            "market": None,
-            "team": None,
-            "traction": None,
-            "deal_terms": None,
-        },
-    },
-    {
-        "company_id": "C40",
-        "company_name": "Blaize",
-        "as_of": None,
-        "scores": {
-            "technology": None,
-            "competition": None,
-            "market": None,
-            "team": None,
-            "traction": None,
-            "deal_terms": None,
-        },
+        "as_of": "2023-11-24",
+        "scores": {"technology": 3, "competition": 3, "market": 3, "team": 3, "traction": 3, "deal_terms": None},
     },
     {
         "company_id": "BENCH_AMBIQ",
         "company_name": "Ambiq",
-        "as_of": None,
-        "scores": {
-            "technology": None,
-            "competition": None,
-            "market": None,
-            "team": None,
-            "traction": None,
-            "deal_terms": None,
-        },
-    },
-    {
-        "company_id": "C49",
-        "company_name": "Moore Threads",
-        "as_of": None,
-        "scores": {
-            "technology": None,
-            "competition": None,
-            "market": None,
-            "team": None,
-            "traction": None,
-            "deal_terms": None,
-        },
+        "as_of": "2025-07-30",
+        "scores": {"technology": 3, "competition": 3, "market": 3, "team": 3, "traction": 3, "deal_terms": None},
     },
 ]
 
@@ -147,9 +104,7 @@ def load_fixed_baseline() -> dict:
     expected_ids = {
         "BENCH_SCINIC",
         "BENCH_GREEN",
-        "C40",
         "BENCH_AMBIQ",
-        "C49",
     }
 
     actual_ids = [
@@ -161,7 +116,7 @@ def load_fixed_baseline() -> dict:
         len(actual_ids) != len(expected_ids)
         or set(actual_ids) != expected_ids
     ):
-        raise ValueError("기준 기업 5곳이 중복 없이 필요합니다.")
+        raise ValueError("기준 기업 3곳이 중복 없이 필요합니다.")
 
     companies = []
 
@@ -196,7 +151,7 @@ def load_fixed_baseline() -> dict:
             missing = [key for key in REQUIRED_CRITERIA if scores[key] is None]
             raise ValueError(
                 f"{name}의 필수 항목 점수가 없어 핵심 점수를 산정할 수 없습니다: "
-                f"{', '.join(missing)}"
+                f"{', '.join(missing)}."
             )
 
         companies.append({
@@ -212,15 +167,18 @@ def load_fixed_baseline() -> dict:
     ):
         raise ValueError("확정된 하한값을 입력하세요.")
 
-    calculated_minimum = min(
-        company["scorecard"]["total_score"]
-        for company in companies
+    calculated_mean = round(
+        statistics.mean(
+            company["scorecard"]["total_score"]
+            for company in companies
+        ),
+        1,
     )
 
-    if FIXED_LOWER_BOUND != calculated_minimum:
+    if FIXED_LOWER_BOUND != calculated_mean:
         raise ValueError(
             f"고정 하한값 {FIXED_LOWER_BOUND}과 "
-            f"기준 기업 최저 총점 {calculated_minimum}이 다릅니다."
+            f"기준 기업 평균 총점 {calculated_mean}이 다릅니다."
         )
 
     return {
@@ -230,6 +188,7 @@ def load_fixed_baseline() -> dict:
         "weights": BASELINE_WEIGHTS.copy(),
         "score_max": BASELINE_SCORE_MAX,
         "comparison": ">",
+        "lower_bound_method": "mean",
         "lower_bound": float(FIXED_LOWER_BOUND),
         "companies": companies,
     }
