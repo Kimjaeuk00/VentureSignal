@@ -1,6 +1,7 @@
 import argparse
 from datetime import datetime
 
+from agents.supervisor.audit import attach_file_logger, run_config
 from core.config import OUTPUT_DIR
 from core.state import initial_state
 from graph.builder import build_graph
@@ -12,7 +13,10 @@ def main():
     args = parser.parse_args()
 
     graph = build_graph()
-    result = graph.invoke(initial_state(args.query), config={"recursion_limit": 50})
+    state = initial_state(args.query)
+    # 결정 로그는 State 가 아니라 파일에 남기고 trace_id 로 잇는다. LangSmith 는 트레이싱을 켠 경우에만 같은 trace_id 를 metadata 로 받는다.
+    log_path = attach_file_logger(OUTPUT_DIR / "logs", state["trace_id"])
+    result = graph.invoke(state, config=run_config(state))
 
     OUTPUT_DIR.mkdir(exist_ok=True)
     name = result.get("selected_candidate") or "HOLD"
@@ -20,6 +24,7 @@ def main():
     path.write_text(result["report"], encoding="utf-8")
     print(result["report"])
     print(f"\n→ 저장: {path}")
+    print(f"→ 결정 로그: {log_path} (trace_id {state['trace_id']})")
 
 
 if __name__ == "__main__":

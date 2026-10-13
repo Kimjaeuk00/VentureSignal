@@ -114,3 +114,26 @@ def test_fallback_summary_removes_only_exact_duplicate_text():
 
     assert summary == "협력 사실 별도 사실"
     assert fact_ids == ["one", "different"]
+
+
+def test_draft_drops_only_the_invalid_items_instead_of_failing_whole_section():
+    """LLM 초안에서 항목 하나가 스키마에 안 맞아도(허용 밖 category, subject 누락) 나머지는 살린다 (실제 실행에서 에이전트 전체가 죽던 문제)."""
+    from agents.founder_traction.schemas import Draft
+
+    good = {"id": "f1", "subject": "홍길동", "category": "career", "text": "경력"}
+    draft = Draft.model_validate({
+        "facts": [good, {"id": "f2", "subject": "홍길동", "category": "not-a-category", "text": "x"}, {"id": "f3", "category": "career", "text": "subject 없음"}],
+        "statements": [{"id": "s1", "kind": "summary", "text": "ok", "fact_ids": ["f1"]}, {"id": "s2", "kind": "nonsense", "text": "x"}],
+    })
+    assert [f.id for f in draft.facts] == ["f1"]
+    assert [s.id for s in draft.statements] == ["s1"]
+
+
+def test_draft_still_rejects_a_non_list_payload():
+    import pytest
+    from pydantic import ValidationError
+
+    from agents.founder_traction.schemas import Draft
+
+    with pytest.raises(ValidationError):
+        Draft.model_validate({"facts": "not a list"})

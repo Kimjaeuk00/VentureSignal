@@ -24,7 +24,7 @@ HUMAN_PROMPT = """기업: {company_name} ({company_id})
 """
 
 WEB_PROMPT = """기업: {company_name} ({company_id})
-
+{focus}
 아래 [1차 요약]은 조사자료(PDF)만으로 작성했다. [웹 검색 결과]로 보강한 최종 기술 요약을 같은 형식으로 작성하라.
 
 보강 규칙

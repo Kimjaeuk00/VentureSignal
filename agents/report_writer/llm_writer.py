@@ -114,12 +114,12 @@ def _dump(model) -> str:
 
 
 @traceable(name="report_writer.invest_prose", run_type="chain")
-def write_invest_prose(ctx: ReportContext) -> InvestProse:
+def write_invest_prose(ctx: ReportContext, revision_feedback: str = "") -> InvestProse:
     """LLM 문장 → 검증 → 실패 시 결정적 폴백."""
     c = ctx.selected
     source = _render_candidate(c)
     user = f"{source}\n\n위 기업의 투자 검토 보고서 문장을 작성하라."
-    feedback = ""
+    feedback = revision_feedback  # 품질 평가에서 지적된 문제 (처음 작성이면 빈 문자열)
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
             prose: InvestProse = _invoke(InvestProse, INVEST_SYSTEM, user, feedback)
@@ -135,7 +135,7 @@ def write_invest_prose(ctx: ReportContext) -> InvestProse:
 
 
 @traceable(name="report_writer.hold_prose", run_type="chain")
-def write_hold_prose(ctx: ReportContext) -> HoldProse:
+def write_hold_prose(ctx: ReportContext, revision_feedback: str = "") -> HoldProse:
     """후보별로 검증해 실패한 후보만 결정적 문장으로 바꾼다. 후보 자료는 서로 섞지 않는다."""
     fallback = hold_prose(ctx)
     fb_by_id = {p.company_id: p for p in fallback.companies}
@@ -143,7 +143,7 @@ def write_hold_prose(ctx: ReportContext) -> HoldProse:
     all_source = "\n\n".join(sources.values())
     user = f"{all_source}\n\n위 후보 {len(ctx.candidates)}곳이 모두 보류다. 보류 보고서 문장을 작성하라."
 
-    feedback = ""
+    feedback = revision_feedback  # 품질 평가에서 지적된 문제 (처음 작성이면 빈 문자열)
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
             prose: HoldProse = _invoke(HoldProse, HOLD_SYSTEM, user, feedback)

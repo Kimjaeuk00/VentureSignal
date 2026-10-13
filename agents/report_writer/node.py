@@ -32,6 +32,14 @@ logger = logging.getLogger(__name__)
 NO_CANDIDATE_NOTICE = "평가된 후보가 없어 보고서를 작성하지 않았습니다."
 
 
+def _revision_feedback(state: GraphState) -> str:
+    """품질 평가에서 미달한 보고서를 다시 쓰는 경우, 지적된 문제를 문장 작성 프롬프트에 넘긴다."""
+    verdict = state.get("quality_verdict")
+    if state.get("report") is None or not verdict or verdict["passed"]:
+        return ""
+    return "품질 평가에서 지적됐다 — " + "; ".join(verdict["feedback"])[:600]
+
+
 @traceable(name="report_writer", run_type="chain", tags=["report_writer"])
 def run(state: GraphState) -> dict:
     try:
@@ -39,12 +47,13 @@ def run(state: GraphState) -> dict:
         if ctx.kind == "none":
             return {"report": NO_CANDIDATE_NOTICE}
 
+        revision_feedback = _revision_feedback(state)
         registry = SourceRegistry(titles=ctx.url_titles, accessed=ctx.as_of)
         with llm_budget():  # 문장 작성과 분량 요약을 합쳐 LLM 호출은 보고서 한 건에 최대 LLM_CALL_LIMIT(3)회
             if ctx.kind == "invest":
-                document = build_invest_document(ctx, write_invest_prose(ctx), registry)
+                document = build_invest_document(ctx, write_invest_prose(ctx, revision_feedback), registry)
             else:
-                document = build_hold_document(ctx, write_hold_prose(ctx), registry)
+                document = build_hold_document(ctx, write_hold_prose(ctx, revision_feedback), registry)
             try:
                 # PDF 는 MAX_PAGES 쪽 이내: 넘으면 요약해 다시 만든다. 마크다운도 최종 PDF 와 같은 문서다.
                 document, pdf_path, pages = write_pdf_fit(document)

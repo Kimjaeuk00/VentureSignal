@@ -23,6 +23,7 @@ from core.sources import SourceBook
 from core.state import GraphState, evaluation_update, make_analysis
 from rag.retriever import get_company_pages, search
 from tools.web_search import web_search
+from core.rework import focus_text, rework_notes_for, rework_queries_for
 
 from prompts.market_eval import MARKET_SYSTEM_PROMPT, MARKET_USER_PROMPT
 from .schemas import MarketAnalysis, MarketSearchQuery
@@ -31,6 +32,14 @@ from .schemas import MarketAnalysis, MarketSearchQuery
 # 기업 1곳당 검색 목적별 최대 1회, 전체 최대 2회
 MAX_WEB_QUERIES = 2
 WEB_RESULTS_PER_QUERY = 3
+
+
+def _stage(base: str, notes: list[str], plan: bool = False, queries: list[str] = ()) -> str:
+    """분석 단계 문구. 재작업이면 Supervisor 가 지적한 부족한 항목을 덧붙인다 (plan=True 면 웹 검색 계획에 반영하게 한다)."""
+    if not notes:
+        return base
+    extra = "웹 검색 계획(web_search_queries)에 이 항목을 확인할 검색어를 포함하라.\n" if plan else ""
+    return base + focus_text(notes, queries) + extra
 
 
 def _to_json(value) -> str:
@@ -317,6 +326,8 @@ def run(state: GraphState) -> dict:
     if not cid:
         raise ValueError("current_candidate가 비어 있습니다.")
 
+    notes = rework_notes_for(state, cid, "market_eval")  # 재작업이면 Supervisor 가 지적한 부족한 항목
+
     candidate = next(
         (
             item
@@ -330,6 +341,8 @@ def run(state: GraphState) -> dict:
         raise ValueError(
             f"후보 목록에서 company_id={cid}인 기업을 찾지 못했습니다."
         )
+
+    queries = rework_queries_for(state, cid, "market_eval", candidate["company_name"])
 
     # 2. 해당 기업의 시장성 페이지 조회
     company_chunks = [
@@ -376,7 +389,7 @@ def run(state: GraphState) -> dict:
     initial = _analyze_checked(
         model=model,
         inputs=inputs,
-        stage="RAG 초기 분석",
+        stage=_stage("RAG 초기 분석", notes, plan=True, queries=queries),
         web_context={
             "status": "아직 웹 검색을 실행하지 않음",
         },
@@ -489,7 +502,7 @@ def run(state: GraphState) -> dict:
             final = _analyze_checked(
                 model=model,
                 inputs=inputs,
-                stage="웹 보완 후 최종 분석",
+                stage=_stage("웹 보완 후 최종 분석", notes, queries=queries),
                 web_context={
                     "initial_missing_information": missing,
                     "search_plan": [

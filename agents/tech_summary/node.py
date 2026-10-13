@@ -20,6 +20,7 @@ from datetime import date
 from prompts.tech_summary import HUMAN_PROMPT, SYSTEM_PROMPT, WEB_PROMPT
 from agents.tech_summary.schemas import TechSummaryOutput
 from core.llm import get_llm
+from core.rework import focus_text, rework_notes_for, rework_queries_for
 from core.state import GraphState, evaluation_update, make_analysis
 from rag.retriever import get_company_pages, search
 from core.sources import SourceBook
@@ -73,7 +74,9 @@ def run(state: GraphState) -> dict:
     book = SourceBook(canonicalize=True, rag_ids={sid for p in pages for sid in p["source_ids"]})
 
     # 2차: 정해진 검색어로 웹서치해 미확인 항목 보강. 결과가 없거나 실패하면 1차 요약을 그대로 쓴다.
-    web_results, web_log = _web_search(company_name, out.product, book)
+    notes = rework_notes_for(state, cid, "tech_summary")  # 재작업이면 Supervisor 가 지적한 부족한 항목과 검색어
+    queries = rework_queries_for(state, cid, "tech_summary", company_name)
+    web_results, web_log = _web_search(company_name, out.product, book, notes, queries)
     if web_results:
         out = llm.invoke(
             [
@@ -86,6 +89,7 @@ def run(state: GraphState) -> dict:
                         draft=out.model_dump_json(indent=2),
                         context=context,
                         web_context=_format_web(web_results),
+                        focus=focus_text(notes, queries),
                     ),
                 ),
             ]
@@ -159,11 +163,15 @@ def run(state: GraphState) -> dict:
     return update
 
 
-def _web_search(company_name: str, product: str, book: SourceBook) -> tuple[list, dict]:
-    """정해진 검색어로 웹서치. 웹은 보강용이라 실패해도 예외를 올리지 않고 이유를 기록한다."""
+def _web_search(
+    company_name: str, product: str, book: SourceBook, notes: list[str] = (), extra_queries: list[str] = ()
+) -> tuple[list, dict]:
+    """정해진 검색어로 웹서치. 재작업이면 검색어를 더한다 (Supervisor 가 정한 검색어, 없으면 부족한 항목 문구).
+    웹은 보강용이라 실패해도 예외를 올리지 않고 이유를 기록한다."""
     product = _clean_product(product)
     target = company_name if product in ("", "미확인") else f"{company_name} {product}"
-    queries = [q.format(target=target) for q in WEB_QUERIES]
+    added = list(extra_queries) or [f"{target} {note}" for note in notes]
+    queries = [q.format(target=target) for q in WEB_QUERIES] + added
     log = {"searched_at": date.today().isoformat(), "queries": queries}  # 보고서 기준일·REFERENCE 용
     try:
         found = [r for q in queries for r in web_search(q, max_results=WEB_MAX_RESULTS)]

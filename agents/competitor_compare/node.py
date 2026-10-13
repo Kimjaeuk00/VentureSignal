@@ -23,6 +23,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from core.config import LLM_MODEL, LLM_PROVIDER
 from core.sources import SourceBook
+from core.rework import focus_text, rework_notes_for, rework_queries_for
 from core.state import GraphState, evaluation_update, make_analysis
 from prompts.competitor_compare import COMPETITION_INSTRUCTIONS
 from tools.web_search import web_search
@@ -167,7 +168,11 @@ def run(state: GraphState) -> dict:
     agent.invoke(
         {"messages": [{
             "role": "user",
-            "content": f"다음 기업의 경쟁 제품을 비교하세요: {json.dumps(company, ensure_ascii=False)}",
+            "content": f"다음 기업의 경쟁 제품을 비교하세요: {json.dumps(company, ensure_ascii=False)}"
+                       + focus_text(
+                           rework_notes_for(state, cid, "competitor_compare"),
+                           rework_queries_for(state, cid, "competitor_compare", company["company_name"]),
+                       ),
         }]},
         config={"recursion_limit": 24},
     )

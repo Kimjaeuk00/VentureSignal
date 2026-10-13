@@ -19,3 +19,6 @@ docs/*
 CLAUDE.md
 
 
+/shrimp_data
+.mcp.json
+shrimp-rules.md

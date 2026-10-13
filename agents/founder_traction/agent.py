@@ -29,6 +29,7 @@ from prompts.founder_traction import (
     REVIEW_INSTRUCTION,
     SYSTEM,
 )
+from core.rework import focus_text, rework_notes_for, rework_queries_for
 from .schemas import Discovery, Draft, Fact, Review
 from .settings import AgentConfig, SECTIONS, VERSION
 from .source_collection import build_sources, collect_pages
@@ -83,7 +84,7 @@ class FounderPerformanceAgent:
             return make_analysis(summary="확인 가능한 자료를 확보하지 못했습니다.",
                                  risks=["추가 자료 확인 필요"], details={"facts": [], "status": "no_sources"})
         draft = self._ask(Draft,
-            DRAFT_INSTRUCTION.format(section=section, scope=SECTIONS[section]),
+            DRAFT_INSTRUCTION.format(section=section, scope=SECTIONS[section]) + focus_text(context.get("rework_focus", []), context.get("rework_queries", [])),
             {"context": context, "sources": list(sources.values()),
              "instruction_detail": DRAFT_DETAIL})
         # Validate locally before one semantic review. Never discard a whole section.
@@ -197,12 +198,18 @@ class FounderPerformanceAgent:
         team_docs = profile_docs + initial + profile_hits + official + sum(batches[2:2 + 2*len(founders)], [])
         team_docs = [d for d in team_docs if not profile_url(d["url"]) or profile_url(d["url"]) in own_profiles]
         peer_docs = sum(batches[2 + 2*len(founders):], [])
+        # 재작업이면 Supervisor 가 지적한 부족한 항목을 겨냥한 검색을 따로 더한다 (batches 의 인덱스 규칙을 깨지 않도록 별도 배치)
+        notes = rework_notes_for(state, cid, "founder_traction")
+        queries_for_notes = rework_queries_for(state, cid, "founder_traction", name) or [f'"{name}" {note}' for note in notes]
+        extra_docs = sum(self._search(queries_for_notes), []) if notes else []
         context = {"company": company, "founder_names": [f.name for f in founders],
                    "founders": [f.model_dump() for f in founders], "peers": peers,
                    "profile_collection": statuses,
                    "prior_hints": {k: prior.get(k, {}).get("summary", "") for k in ("technology", "market", "competition")},
+                   "rework_focus": notes, "rework_queries": rework_queries_for(state, cid, "founder_traction", name),
                    "as_of": datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat()}
-        docs = {"team": team_docs, "traction": batches[0], "deal_terms": batches[1]}
+        docs = {"team": team_docs + [d for d in extra_docs if not profile_url(d["url"])],
+                "traction": batches[0] + extra_docs, "deal_terms": batches[1] + extra_docs}
         with ThreadPoolExecutor(max_workers=self.config.workers) as pool:
             results = list(pool.map(lambda s: self._analyze(s, docs[s] + peer_docs, context), SECTIONS))
         output = dict(zip(SECTIONS, results))
