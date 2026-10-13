@@ -20,7 +20,8 @@ def main():
 
     OUTPUT_DIR.mkdir(exist_ok=True)
     name = result.get("selected_candidate") or "HOLD"
-    path = OUTPUT_DIR / f"{datetime.now():%Y%m%d_%H%M%S}_{name}.md"
+    stamp = datetime.fromisoformat(state["started_at"]).strftime("%Y%m%d_%H%M%S")  # PDF 파일명과 같은 시각
+    path = OUTPUT_DIR / f"{stamp}_{name}.md"
     path.write_text(result["report"], encoding="utf-8")
     print(result["report"])
     print(f"\n→ 저장: {path}")

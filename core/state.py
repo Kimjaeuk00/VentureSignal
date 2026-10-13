@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 from typing import TypedDict, Optional, Annotated, Literal, Any, NotRequired
 
 # =========================
@@ -221,6 +222,10 @@ class GraphState(TypedDict):
     # 외부 로그/트레이스와 State 를 잇는 상관 키 (실행마다 생성)
     trace_id: str
 
+    # 실행 시작 시각(ISO, 로컬 시간). 이 실행이 만드는 보고서 파일명(md·PDF)에 같은 시각을 써서 서로 짝이 보이게 하고,
+    # 보고서를 다시 써도 같은 이름으로 덮어쓰게 한다.
+    started_at: str
+
     # Supervisor 진입 횟수와 상한 (종료 가드)
     step_count: int
     max_steps: int
@@ -263,6 +268,7 @@ def initial_state(query: str, max_steps: int = DEFAULT_MAX_STEPS) -> GraphState:
         "candidate_index": 0,
         "current_candidate": None,
         "trace_id": uuid.uuid4().hex,
+        "started_at": datetime.now().isoformat(timespec="seconds"),
         "step_count": 0,
         "max_steps": max_steps,
         "next_agent": None,

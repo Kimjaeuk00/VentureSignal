@@ -4,12 +4,12 @@ from pydantic import BaseModel, Field
 
 
 class ItemRationales(BaseModel):
-    team: str = Field(description="창업자·팀 점수의 핵심 근거 한 문장")
-    market: str = Field(description="시장성 점수의 핵심 근거 한 문장")
-    technology: str = Field(description="제품·기술력 점수의 핵심 근거 한 문장")
-    competition: str = Field(description="경쟁 우위 점수의 핵심 근거 한 문장")
-    traction: str = Field(description="실적 점수의 핵심 근거 한 문장")
-    deal_terms: str = Field(description="투자조건 점수의 핵심 근거 한 문장")
+    team: str = Field(description="창업자·팀 점수의 핵심 근거 한두 문장")
+    market: str = Field(description="시장성 점수의 핵심 근거 한두 문장")
+    technology: str = Field(description="제품·기술력 점수의 핵심 근거 한두 문장")
+    competition: str = Field(description="경쟁 우위 점수의 핵심 근거 한두 문장")
+    traction: str = Field(description="실적 점수의 핵심 근거 한두 문장")
+    deal_terms: str = Field(description="투자조건 점수의 핵심 근거 한두 문장")
 
 
 class InvestProse(BaseModel):

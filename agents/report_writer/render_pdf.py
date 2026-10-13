@@ -154,7 +154,7 @@ log = logging.getLogger(__name__)
 USE_CHROMIUM = True  # False 면 항상 Story 로 만든다 (테스트·Chromium 없는 환경)
 
 # 보고서 PDF 는 MAX_PAGES 쪽 이내여야 한다(요구사항). 넘으면 글자 크기는 그대로 두고 내용을 LLM 으로 요약해 다시 만든다(condense.py).
-MAX_PAGES = 5
+MAX_PAGES = 10  # 과제(Multi-Agent Orchestration) 기준: 보고서는 최대 10장
 BODY_Y = (60.0, 786.0)  # A4 본문 영역의 세로 범위(pt) — Chromium(여백 18mm)과 Story(MARGIN) 모두에 대략 맞다
 
 
@@ -200,7 +200,7 @@ def write_pdf_fit(doc: Document, out_dir: Optional[Path] = None) -> tuple[Docume
 
     글자 크기·여백은 그대로다. 요약은 원본 문서에서 다시 시작해 줄이는 비율만 키운다(요약을 거듭 요약하지 않는다).
     LLM 요약은 최대 LLM_ROUNDS 번이고(호출 상한은 llm_writer.llm_budget), 그래도 넘으면 LLM 없이 결정적으로 더 줄여
-    5쪽 안에 들게 한다 — 이 단계는 PDF 만 다시 만들어 비용이 적다.
+    MAX_PAGES 쪽 안에 들게 한다 — 이 단계는 PDF 만 다시 만들어 비용이 적다.
     """
     from .condense import LLM_ROUNDS, MAX_STEPS, condense, first_ratio
 

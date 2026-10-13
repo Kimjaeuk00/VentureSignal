@@ -7,7 +7,7 @@ State → ReportContext.
 
 import re
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Iterable, Literal, Optional
 
 from core.state import GraphState
@@ -97,6 +97,8 @@ class ReportContext:
     as_of: str
     candidates: list[CandidateData]  # invest: 선정 후보 1곳, hold: 평가한 후보 전부
     unevaluated: list[str] = field(default_factory=list)  # 평가하지 못한 후보의 이름
+    stamp: str = ""  # 파일명에 쓰는 시각 YYYYMMDD_HHMMSS (실행 시작 시각, 없으면 지금)
+    process: list[str] = field(default_factory=list)  # 분석 과정(조정 단계 횟수, 재작업·제외 이력). State 값으로만 만든다
     url_titles: dict[str, str] = field(default_factory=dict)
 
     @property
@@ -143,6 +145,47 @@ def _url_titles(candidates: list[CandidateData], state_sources: Optional[dict] =
     return titles
 
 
+AGENT_LABELS = {
+    "tech_summary": "기술 요약", "market_eval": "시장성 평가", "competitor_compare": "경쟁사 비교", "founder_traction": "창업자·실적 분석",
+}
+
+
+def _process_lines(state: GraphState, candidates: list["CandidateData"]) -> list[str]:
+    """분석 과정: 조정 단계가 몇 번 판단했고 어떤 분석을 재작업·제외했는지. 입력(State)에 있는 사실만 쓴다."""
+    names = {c.company_id: c.company_name for c in candidates}
+    lines: list[str] = []
+    steps, evaluated = state.get("step_count") or 0, len(state.get("evaluations") or {})
+    if steps:
+        lines.append(f"조정 단계(Supervisor)가 {steps}회 판단하며 후보 {evaluated}곳을 평가했다.")
+
+    rework, status, notes = state.get("rework_count") or {}, state.get("node_status") or {}, state.get("rework_notes") or {}
+    for key, count in rework.items():  # key = "{company_id}:{agent}"
+        cid, _, agent = key.partition(":")
+        if cid not in names or agent not in AGENT_LABELS or not count:
+            continue
+        note = notes.get(key)
+        missing = note.get("missing") if isinstance(note, dict) else note
+        text = f"{names[cid]}: {AGENT_LABELS[agent]}에서 근거 부족으로 재작업을 {count}회 했다"
+        if missing:
+            text += f" (부족하다고 지적된 항목: {'; '.join(str(m) for m in missing[:3])})"
+        if status.get(key) == "excluded":
+            text += ". 재작업 후에도 부족해 미확인으로 처리했다"
+        lines.append(text + ".")
+    for key, value in status.items():
+        cid, _, agent = key.partition(":")
+        if value == "excluded" and cid in names and agent in AGENT_LABELS and not rework.get(key):
+            lines.append(f"{names[cid]}: {AGENT_LABELS[agent]}의 근거가 부족한 채로 확정해 미확인으로 처리했다.")
+    return lines
+
+
+def _stamp(state: GraphState) -> str:
+    """보고서 파일명에 쓰는 시각. 실행 시작 시각(started_at)을 쓰고, 없거나 형식이 틀리면 지금."""
+    try:
+        return datetime.fromisoformat(state.get("started_at") or "").strftime("%Y%m%d_%H%M%S")
+    except ValueError:
+        return datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
 def collect(state: GraphState) -> ReportContext:
     selected = state.get("selected_candidate")
     all_ids = [c["company_id"] for c in state.get("candidates", [])]
@@ -154,7 +197,7 @@ def collect(state: GraphState) -> ReportContext:
     elif evaluated:
         ids, kind = evaluated, "hold"
     else:
-        return ReportContext(kind="none", query=state.get("query", ""), as_of=date.today().isoformat(), candidates=[])
+        return ReportContext(kind="none", query=state.get("query", ""), as_of=date.today().isoformat(), candidates=[], stamp=_stamp(state))
 
     candidates = [_candidate_data(cid, state) for cid in ids]
     names = {c["company_id"]: c.get("company_name", c["company_id"]) for c in state.get("candidates", [])}
@@ -166,6 +209,8 @@ def collect(state: GraphState) -> ReportContext:
         # 평가 결과가 없는 후보만 (INVEST 전에 이미 평가하고 보류한 후보는 평가한 후보다)
         unevaluated=[names[cid] for cid in all_ids if cid not in state.get("evaluations", {})],
         url_titles=_url_titles(candidates, state.get("sources")),
+        stamp=_stamp(state),
+        process=_process_lines(state, candidates),
     )
 
 

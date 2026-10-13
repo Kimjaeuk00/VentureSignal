@@ -27,7 +27,7 @@ FUNDING_RE = re.compile(r"Series\s*[A-Z]|시리즈\s*[A-Z]|투자\s*유치|라�
 S_ID_RE = re.compile(r"S\d{3}")
 CITED_RE = re.compile(r"\[(\d+(?:,\s*\d+)*)\]")
 MAX_SOURCES = 4  # 한 칸에 적는 출처 번호 수 (본문에 인용이 없을 때)
-BULLET = 120  # 표 안 글머리 한 줄의 길이
+BULLET = 200  # 표 안 글머리 한 줄의 길이 (PDF 10쪽 기준)
 
 
 DEGRADED_TEXT = {
@@ -97,7 +97,7 @@ def _own_facts(cand: CandidateData, key: str, cats) -> list[dict]:
 
 def _fact_row(reg: SourceRegistry, cand: CandidateData, key: str, label: str, cats) -> list[str]:
     facts = _own_facts(cand, key, cats)
-    return _row(reg, label, bullets((f["text"] for f in facts), limit=3, cap=BULLET), cand.fact_sources(key, facts))
+    return _row(reg, label, bullets((f["text"] for f in facts), limit=5, cap=BULLET), cand.fact_sources(key, facts))
 
 
 def _limits(cand: CandidateData) -> list[str]:
@@ -118,7 +118,7 @@ def _limits(cand: CandidateData) -> list[str]:
 def _section_summary(c: CandidateData, prose: InvestProse, reg: SourceRegistry) -> Section:
     return Section("1. SUMMARY", [
         Paragraph(f"**최종 판단** 투자 검토 · **총점** {_total(c)} / 100"),
-        Paragraph(reg.rewrite(brief(prose.summary, 900))),
+        Paragraph(reg.rewrite(brief(prose.summary, 1600))),
     ])
 
 
@@ -130,8 +130,8 @@ def _section_business(c: CandidateData, reg: SourceRegistry) -> Section:
     founded = FOUNDED_RE.search(c.description or "")
     product = get(tech, "product", default="") if not c.is_degraded("technology") else ""
 
-    customer = brief(customers[0], 90) if customers else ""  # 같은 고객 문장이 여러 칸에 반복되지 않게 첫 항목만 짧게 쓴다
-    concept = f"해결: {brief(core, 130)}" if core else (f"고객: {customer}" if customer else "")
+    customer = brief(customers[0], 150) if customers else ""  # 같은 고객 문장이 여러 칸에 반복되지 않게 첫 항목만 짧게 쓴다
+    concept = f"해결: {brief(core, 220)}" if core else (f"고객: {customer}" if customer else "")
 
     members = get(team, "members", default=[]) or []
     people, people_src = [], []
@@ -139,17 +139,17 @@ def _section_business(c: CandidateData, reg: SourceRegistry) -> Section:
         names = {m.get("name"), *(m.get("aliases") or [])}
         career = [f for f in c.facts("team", ["career"]) if f.get("subject") in names]
         people_src += c.fact_sources("team", career)
-        people.append(f"{m.get('name', MISSING)} / {m.get('role') or MISSING} / {join((f['text'] for f in career), '; ', 2, 80) or MISSING}")
+        people.append(f"{m.get('name', MISSING)} / {m.get('role') or MISSING} / {join((f['text'] for f in career), '; ', 3, 120) or MISSING}")
     skills = c.facts("team", ["expertise", "skill", "execution", "publication"])
 
     rows = [
         _row(reg, "기업명·설립연도", f"{c.company_name} / {founded.group(1) + '년' if founded else MISSING}",
              S_ID_RE.findall(c.description)),
         _row(reg, "핵심 컨셉", concept, core_src),
-        _row(reg, "제품·고객", f"제품: {brief(product, 60) or MISSING} / 고객군: {customer or MISSING}", [*core_src, *stage_src]),
-        _row(reg, "수익모델", brief(get(market, "business_model", default=""), 160), c.evidence("market")),
-        _row(reg, "창업자·핵심 인력", bullets(people, limit=4, cap=BULLET), people_src),
-        _row(reg, "팀의 기술 역량", bullets((f["text"] for f in skills), limit=3, cap=BULLET), c.fact_sources("team", skills)),
+        _row(reg, "제품·고객", f"제품: {brief(product, 100) or MISSING} / 고객군: {customer or MISSING}", [*core_src, *stage_src]),
+        _row(reg, "수익모델", brief(get(market, "business_model", default=""), 280), c.evidence("market")),
+        _row(reg, "창업자·핵심 인력", bullets(people, limit=6, cap=BULLET), people_src),
+        _row(reg, "팀의 기술 역량", bullets((f["text"] for f in skills), limit=5, cap=BULLET), c.fact_sources("team", skills)),
     ]
     return Section("2. 사업 아이디어와 팀", [Table(["항목", "분석 결과", "출처"], rows, [18, 70, 12])])
 
@@ -157,19 +157,19 @@ def _section_business(c: CandidateData, reg: SourceRegistry) -> Section:
 def _section_traction(c: CandidateData, reg: SourceRegistry) -> Section:
     runway = get(c.details("deal_terms"), "runway_estimate", default={}) or {}
     money = _own_facts(c, "deal_terms", ["cash", "burn", "runway"])
-    parts = [brief(f["text"], BULLET) for f in money][:3]
+    parts = [brief(f["text"], BULLET) for f in money][:5]
     if runway.get("months") is not None:
         parts.append(f"기준일 {runway.get('as_of', MISSING)} 단순 추정 런웨이 약 {runway['months']:g}개월 ({runway.get('note', '')})".replace(" ()", ""))
     funding = _fact_row(reg, c, "deal_terms", "투자 이력", ["funding", "terms"])
     if funding[1] == MISSING:  # 웹 조사에 없으면 탐색 단계의 기업 설명(RAG)에 적힌 투자 이력을 쓴다 — 본문(7절)과 어긋나지 않게
         hits = [x for x in sentences(" ".join((c.description or "").split())) if FUNDING_RE.search(x)]
         if hits:
-            funding = _row(reg, "투자 이력", bullets(hits, limit=2, cap=BULLET), S_ID_RE.findall(c.description))
+            funding = _row(reg, "투자 이력", bullets(hits, limit=3, cap=BULLET), S_ID_RE.findall(c.description))
     rows = [
         _fact_row(reg, c, "traction", "고객·계약", ["customer", "commercialization", "milestone"]),
         _fact_row(reg, c, "traction", "매출", ["revenue"]),
         funding,
-        _row(reg, "자금 상황", bullets(parts, limit=4), c.fact_sources("deal_terms", money)),
+        _row(reg, "자금 상황", bullets(parts, limit=6), c.fact_sources("deal_terms", money)),
     ]
     return Section("3. 사업 실적과 투자조건", [Table(["항목", "확인 결과", "출처"], rows, [18, 70, 12])])
 
@@ -179,18 +179,18 @@ def _performance(tech: dict) -> str:
     for p in get(tech, "performance", default=[]) or []:
         cond = p.get("condition")
         lines.append(f"{p.get('metric', '')}: {p.get('value', '')} {p.get('unit', '')}".strip() + (f" ({cond})" if cond and cond != MISSING else ""))
-    return bullets(lines, limit=6, cap=140)
+    return bullets(lines, limit=8, cap=220)
 
 
 def _section_market(c: CandidateData, reg: SourceRegistry) -> Section:
     m, comp, tech = c.details("market"), c.details("competition"), c.details("technology")
     customers = get(m, "target_customers", default=[]) or []
     market_src = c.evidence("market")
-    barriers = bullets(get(m, "adoption_barriers", default=[]) or [], limit=3, cap=BULLET)
+    barriers = bullets(get(m, "adoption_barriers", default=[]) or [], limit=5, cap=BULLET)
     market_rows = [
-        _row(reg, "시장 범위", bullets(customers[1:] or customers, limit=3, cap=BULLET), market_src),
-        _row(reg, "시장 규모", brief(get(m, "market_size", default=""), 300), market_src),
-        _row(reg, "시장 성장률", bullets(get(m, "growth_drivers", default=[]) or [], limit=3, cap=BULLET), market_src),
+        _row(reg, "시장 범위", bullets(customers[1:] or customers, limit=5, cap=BULLET), market_src),
+        _row(reg, "시장 규모", brief(get(m, "market_size", default=""), 520), market_src),
+        _row(reg, "시장 성장률", bullets(get(m, "growth_drivers", default=[]) or [], limit=5, cap=BULLET), market_src),
         _row(reg, "목표 고객·수요", f"도입 장벽\n{barriers}" if barriers else "", market_src),
     ]
 
@@ -198,16 +198,16 @@ def _section_market(c: CandidateData, reg: SourceRegistry) -> Section:
     product = get(tech, "product", default="") if not c.is_degraded("technology") else ""
     strengths = get(c.analysis("technology"), "strengths", default=[]) or []
     tech_risks = get(c.analysis("technology"), "risks", default=[]) or []
-    sw = f"강점: {brief(strengths[0], 100)}" if strengths else ""
-    wk = f"약점: {brief(tech_risks[0], 100)}" if tech_risks else ""
+    sw = f"강점: {brief(strengths[0], 160)}" if strengths else ""
+    wk = f"약점: {brief(tech_risks[0], 160)}" if tech_risks else ""
     headers = ["비교 항목", c.company_name, *[(p.get("company_name") or MISSING).split(" (")[0] for p in peers]]
 
-    def row(label, mine, key, cap=130):
+    def row(label, mine, key, cap=200):
         return [label, reg.rewrite(mine) or MISSING, *[reg.rewrite(brief(p.get(key) or "", cap)) or MISSING for p in peers]]
 
     compare = [
         row("기업·제품명", f"{c.company_name} / {product or MISSING}", "product_name"),
-        row("용도·고객", brief(customers[0], 90) if customers else "", "customer_and_use"),
+        row("용도·고객", brief(customers[0], 150) if customers else "", "customer_and_use"),
         row("성능·전력", _performance(tech), "performance_and_power", 160),
         row("가격·도입 조건", "", "price_and_adoption", 110),
         row("강점·약점", "\n".join(p for p in (sw, wk) if p), "strengths_and_weaknesses"),
@@ -234,11 +234,11 @@ def _section_tech(c: CandidateData, reg: SourceRegistry) -> Section:
         if key is None:
             rows.append(_row(reg, label, _performance(tech), perf_src))
         elif key == "validation_limits":
-            text = "\n".join(p for p in (brief(limits, 170), f"미확인: {join((u.rstrip('.。 ') for u in unverified), '; ', 3, 45)}" if unverified else "") if p)
+            text = "\n".join(p for p in (brief(limits, 300), f"미확인: {join((u.rstrip('.。 ') for u in unverified), '; ', 4, 80)}" if unverified else "") if p)
             rows.append(_row(reg, label, text, limits_src))
         else:
             text, src = _finding(tech, key)
-            rows.append(_row(reg, label, brief(text, 220), src))
+            rows.append(_row(reg, label, brief(text, 420), src))
     blocks: list = [Table(["확인 항목", "분석 결과", "출처"], rows, [18, 70, 12])]
     if c.is_degraded("technology"):
         blocks.append(Paragraph(f"※ 기술 분석은 {DEGRADED_TEXT.get(c.status('technology'), '결과 없음')}으로 값을 채우지 못했다."))
@@ -246,7 +246,7 @@ def _section_tech(c: CandidateData, reg: SourceRegistry) -> Section:
 
 
 def _section_risks(c: CandidateData, reg: SourceRegistry) -> Section:
-    def lst(*items, limit=4, cap=BULLET):
+    def lst(*items, limit=6, cap=BULLET):
         return reg.rewrite(bullets(dedupe(i for group in items for i in group), limit=limit, cap=cap)) or MISSING
 
     def ana(key, name):
@@ -258,10 +258,10 @@ def _section_risks(c: CandidateData, reg: SourceRegistry) -> Section:
     limits = _limits(c)
     rows = [
         ["시장·경쟁", lst(ana("market", "risks"), det("market", "adoption_barriers"), ana("competition", "risks"), det("competition", "critical_risks")),
-         lst(det("market", "missing_information"), det("competition", "missing_information"), cap=90)],
-        ["기술·규제", lst(ana("technology", "risks"), limit=3), lst(det("technology", "unverified"), cap=70)],
+         lst(det("market", "missing_information"), det("competition", "missing_information"), cap=160)],
+        ["기술·규제", lst(ana("technology", "risks"), limit=5), lst(det("technology", "unverified"), cap=120)],
         ["팀·자금", lst(ana("team", "risks"), ana("traction", "risks"), ana("deal_terms", "risks")),
-         lst(missing_labels(c, ["team", "traction", "deal_terms"]), limit=6, cap=40)],
+         lst(missing_labels(c, ["team", "traction", "deal_terms"]), limit=8, cap=80)],
         ["분석의 한계", lst(limits) if limits else MISSING, "자료를 보완해 재분석"],
     ]
     return Section("6. 사업 리스크와 한계", [Table(["구분", "주요 위험 또는 한계", "추가 확인 사항"], rows, [16, 54, 30])])
@@ -273,14 +273,14 @@ def _section_scorecard(c: CandidateData, prose: InvestProse, reg: SourceRegistry
         rationale = getattr(prose.item_rationales, key, "") or MISSING
         weight = "참고" if key in REFERENCE_ITEMS else f"{SCORECARD_WEIGHTS[key] * 100:g}%"
         rows.append([f"{label}(참고)" if key in REFERENCE_ITEMS else label, weight, _score(c, key),
-                     f"{reg.rewrite(brief(rationale, 220))} {reg.cite((get(c.assessed(key), 'evidence', default=[]) or c.evidence(key))[:3])}".strip()])
+                     f"{reg.rewrite(brief(rationale, 420))} {reg.cite((get(c.assessed(key), 'evidence', default=[]) or c.evidence(key))[:3])}".strip()])
     rows.append(["**핵심 점수**", f"**{sum(w for k, w in SCORECARD_WEIGHTS.items() if k not in REFERENCE_ITEMS) * 100:g}%**", f"**{_total(c)} / 100**", ""])
     note = _core_note(c, named=False)
     return Section("7. 종합 평가와 투자 판단", [
         Table(["평가 항목", "비중", "점수 0~5", "핵심 근거·출처"], rows, [16, 9, 13, 62]),
         *([Paragraph(f"※ {note}")] if note else []),
-        Paragraph(f"**최종 판단** 투자 검토 · **판단 이유** {reg.rewrite(brief(prose.decision_reason, 420))}"),
-        Paragraph(f"**재검토 조건** {reg.rewrite(brief(prose.revisit_conditions, 420))}"),
+        Paragraph(f"**최종 판단** 투자 검토 · **판단 이유** {reg.rewrite(brief(prose.decision_reason, 700))}"),
+        Paragraph(f"**재검토 조건** {reg.rewrite(brief(prose.revisit_conditions, 700))}"),
     ])
 
 
@@ -295,6 +295,8 @@ def build_invest_document(ctx: ReportContext, prose: InvestProse, reg: SourceReg
     sections = [_section_summary(c, prose, reg), _section_business(c, reg), _section_traction(c, reg),
                 _section_market(c, reg), _section_tech(c, reg)]
     risks = _section_risks(c, reg)
+    if ctx.process:  # 섹션 6 표에 분석 과정을 덧붙인다 (재작업·제외 이력)
+        risks.blocks[0].rows.append(["분석 과정", bullets(ctx.process, limit=8, cap=240), "—"])
     if c_unevaluated:  # 섹션 6 '분석의 한계'에 평가하지 않은 후보를 덧붙인다
         table = risks.blocks[0]
         note = f"평가하지 않은 후보: {', '.join(c_unevaluated)} (선정 후보가 먼저 확정되어 평가를 종료)"
@@ -306,7 +308,7 @@ def build_invest_document(ctx: ReportContext, prose: InvestProse, reg: SourceReg
         meta=_meta(ctx),
         sections=sections,
         kind="invest",
-        file_stem=f"{date.today():%Y%m%d}_{c.company_id}_투자검토보고서",
+        file_stem=f"{ctx.stamp}_{c.company_id}_투자검토보고서",
     )
 
 
@@ -335,10 +337,10 @@ def build_hold_document(ctx: ReportContext, prose: HoldProse, reg: SourceRegistr
     for c in ctx.candidates:
         cp = by_id.get(c.company_id)
         rows = []
-        for key, loss in loss_ranking(c)[:3]:
+        for key, loss in loss_ranking(c)[:6]:  # 10쪽 기준: 점수가 낮은 3개가 아니라 전 항목
             risk = (get(c.analysis(key), "risks", default=[]) or [""])[0]
             text = "\n".join(p for p in (item_rationale(c, key), f"위험: {first_sentence(risk)}" if risk else "") if p)
-            rows.append([ITEM_LABEL[key], _score(c, key), reg.rewrite(text), reg.cite(c.evidence(key)[:3])])
+            rows.append([ITEM_LABEL[key], _score(c, key), reg.rewrite(text), reg.cite(c.evidence(key)[:4])])
         reasons.blocks.append(SubHeading(f"{c.company_name} — 총점 {_total(c)} / 100"))
         if rows:
             reasons.blocks.append(Table(["항목", "점수 0~5", "사유·근거", "출처"], rows, [16, 10, 62, 12]))
@@ -356,6 +358,8 @@ def build_hold_document(ctx: ReportContext, prose: HoldProse, reg: SourceRegistr
         limits = _limits(c)
         limit_rows.append([c.company_name, reg.rewrite(bullets(limits)) if limits else "특이사항 없음"])
     limits_section = Section("4. 분석의 한계", [Table(["후보", "분석의 한계"], limit_rows, [22, 78])])
+    if ctx.process:
+        limits_section.blocks.append(Paragraph("**분석 과정**\n" + bullets(ctx.process, limit=10, cap=260)))
     if ctx.unevaluated:
         limits_section.blocks.append(Paragraph(f"평가하지 않은 후보: {', '.join(ctx.unevaluated)}"))
 
@@ -364,5 +368,5 @@ def build_hold_document(ctx: ReportContext, prose: HoldProse, reg: SourceRegistr
         meta=_meta(ctx, [("질의", ctx.query)]),
         sections=[overview, scores, reasons, limits_section, _section_reference(reg, "5")],
         kind="hold",
-        file_stem=f"{date.today():%Y%m%d}_보류_투자검토보고서",
+        file_stem=f"{ctx.stamp}_보류_투자검토보고서",
     )
