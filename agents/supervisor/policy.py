@@ -44,8 +44,7 @@ ANALYSIS_AGENTS: dict[str, tuple[str, ...]] = {
     FOUNDER_TRACTION: ("team", "traction"),
 }
 
-# TODO: 설계 문서에 미정 — 팀 합의 후 확정 (docs/State-Schema-설계.md 6절)
-# 아래 값은 근거 있는 기준이 아니라 임시값이다.
+# 설정값: 실행 측정(Supervisor 진입 횟수, 재작업 효과)을 보고 조정한다.
 MAX_REWORK = 1  # 에이전트별 재작업 상한
 MIN_EVIDENCE = 1  # 분석 결과 하나가 가져야 하는 최소 출처 수
 

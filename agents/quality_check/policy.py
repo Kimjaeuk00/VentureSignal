@@ -12,8 +12,7 @@
 
 import re
 
-# TODO: 설계 문서에 미정 — 팀 합의 후 확정 (docs/State-Schema-설계.md 6절)
-# 아래 값은 근거 있는 기준이 아니라 임시값이다.
+# 설정값: 품질 평가의 가드레일 기준. 실행 결과를 보고 조정한다.
 MAX_REVISIONS = 1  # 품질 미달 시 보고서를 다시 쓰는 최대 횟수 (평가는 최대 MAX_REVISIONS + 1 번)
 MAX_TOP_SOURCE_SHARE = 0.5  # 가장 많이 인용된 출처가 전체 인용에서 차지하는 비율 상한
 MIN_DISTINCT_SOURCES = 2  # 본문이 인용하는 서로 다른 출처의 최소 개수
@@ -25,8 +24,8 @@ REFERENCE_HEADING_RE = re.compile(r"^##\s*(?:\d+\.\s*)?REFERENCE\s*$", re.MULTIL
 REFERENCE_ENTRY_RE = re.compile(r"^\[(\d+)\]", re.MULTILINE)
 CITATION_RE = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")
 
-# 근거 없는 단정·추천 표현 (임시 목록)
+# 근거 없는 단정·추천 표현 (설정 목록)
 PROMOTIONAL_PHRASES = ["강력 추천", "강력히 추천", "반드시 투자", "무조건", "압도적", "확실한 성공", "틀림없", "최고의 기업"]
 
-# 후보 두 곳 이상이 한 문장에 함께 나올 때 우열을 뜻하는 표현 (임시 목록)
+# 후보 두 곳 이상이 한 문장에 함께 나올 때 우열을 뜻하는 표현 (설정 목록)
 RANKING_PHRASES = ["보다 우수", "보다 낫", "보다 뛰어", "보다 유망", "앞선다", "앞서 있", "뒤처", "열위"]

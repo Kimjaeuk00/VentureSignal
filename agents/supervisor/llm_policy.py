@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 ENABLED = os.getenv("SUPERVISOR_LLM", "on").strip().lower() != "off"
 
-# TODO: 팀 합의 필요 (docs/State-Schema-설계.md 6절). 근거 있는 값이 아니라 임시값이다.
+# 설정값: 호출 비용과 응답 안정성을 보고 조정한다.
 MAX_ASK = 2  # 불변 조건을 어긴 응답에 한 번 더 묻는다 (진입 한 번에 LLM 호출은 최대 이 횟수)
 TEXT_CHARS = 300  # 보고 요약을 LLM 에 보여 줄 때 자르는 길이
 LIST_ITEMS = 3  # 위험·미확인 항목을 보여 줄 개수

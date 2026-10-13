@@ -88,8 +88,7 @@ class QualityVerdict(TypedDict):
     feedback: list[str]
 
 
-# TODO: 설계 문서에 미정 — 팀 합의 후 확정 (docs/State-Schema-설계.md 6절)
-# Supervisor 진입 횟수 상한(안전망). 시작 1회, 후보 1곳 평가에 6회, 보고서 단계에 2회(작성 후·평가 후)가 들고,
+# 설정값: Supervisor 진입 횟수 상한(안전망). 시작 1회, 후보 1곳 평가에 6회, 보고서 단계에 2회(작성 후·평가 후)가 들고,
 # 재작업·재시도·보고서 재작성이 1회씩 더해진다. 후보 3곳 모두 HOLD면 21회, 후보마다 재작업 1회면 24회이고,
 # 후보 3곳·에이전트 4개가 모두 재작업되고 품질도 계속 미달인 최악은 약 35회다(MAX_REWORK=1, 스텁 측정).
 # 이 값은 정상 흐름에서는 닿지 않는 안전망이다. MAX_REWORK 를 올리면 다시 계산해야 한다.
@@ -180,12 +179,22 @@ class CandidateEvaluation(TypedDict, total=False):
 # =========================
 
 
-class GraphState(TypedDict):
-    # 설계 원칙 (docs/State-Schema-설계.md):
-    # - State = "작업 결과(페이로드)" + "조정·종료·재개에 필요한 최소 제어 메타"만 담는다.
-    # - 결정 로그·트레이스 본문은 State 에 넣지 않는다. 외부 로거/LangSmith 로 보내고 trace_id 로 State 와 잇는다.
-    # - 각 노드는 자기 필드만 반환한다. 제어 필드는 Supervisor 가 쓴다.
+# 설계 원칙(주석으로 문서화 강제):  (패턴: Supervisor. 상세 근거는 docs/State-Schema-설계.md)
+# - State = "작업 결과(페이로드)" + "제어 흐름·종료·재개에 필요한 최소 메타"만. 로그/트레이스 본문은 넣지 않음.
+# - [제어 vs 페이로드 분리] 아래 두 블록으로 나눈다. Supervisor 는 제어 필드만, 분석 노드는 자기 evaluations 필드만 쓴다.
+# - [관측성 위치] 결정 로그(사유 포함)는 외부 로거/LangSmith 로 분리한다. State 에는 마지막 결정 1건(last_decision)만 둔다.
+# - [지속성 비용] 체크포인트가 늘지 않도록 이력 리스트 대신 카운터(rework_count)와 최신 지시 1건(rework_notes)만 둔다.
+#   evidence 는 본문이 아니라 출처 ID/URL 만 보관한다.
+# - [상관] trace_id 로 State·결정 로그·LangSmith run 을 잇는다 (initial_state 가 실행마다 생성).
+# - [재개/복구] node_status·rework_count·last_error·step_count 로 어디까지 진행했고 무엇이 실패했는지 파악한다.
+#   실패한 에이전트는 Supervisor 가 재시도(상한 내)/제외(미확인)를 정한다.
+# - [동시 처리] 부분 갱신되는 dict 필드는 reducer(merge_evaluations, merge_sources, merge_dict)로
+#   덮어쓰지 않고 키 단위로 병합한다. 노드가 동시에 써도(병렬 확장) 서로의 결과가 유지된다.
+# - [종료 보장] max_steps(Supervisor 진입 상한), 에이전트별 재작업 상한(MAX_REWORK), 보고서 재작성 상한(MAX_REVISIONS),
+#   LangGraph recursion_limit(audit.recursion_limit 이 계산)으로 무한 루프를 막는다.
 
+
+class GraphState(TypedDict):
     # ── 작업 페이로드 ───────────────────────────
 
     # 사용자 최초 질의
@@ -220,21 +229,21 @@ class GraphState(TypedDict):
     current_candidate: Optional[str]
 
     # 외부 로그/트레이스와 State 를 잇는 상관 키 (실행마다 생성)
-    trace_id: str
+    trace_id: str  # ★ 외부 로그/트레이스와 잇는 상관 키
 
     # 실행 시작 시각(ISO, 로컬 시간). 이 실행이 만드는 보고서 파일명(md·PDF)에 같은 시각을 써서 서로 짝이 보이게 하고,
     # 보고서를 다시 써도 같은 이름으로 덮어쓰게 한다.
     started_at: str
 
     # Supervisor 진입 횟수와 상한 (종료 가드)
-    step_count: int
+    step_count: int  # 종료 가드
     max_steps: int
 
     # Supervisor 가 정한 다음 노드 이름 (add_conditional_edges 의 분기 키)
     next_agent: Optional[str]
 
     # 재개·재시도 판단용 최소 상태. key = "{company_id}:{agent}"
-    node_status: Annotated[dict[str, NodeStatus], merge_dict]
+    node_status: Annotated[dict[str, NodeStatus], merge_dict]  # 재개·재시도 판단용 최소 상태
 
     # 에이전트별 재작업 횟수 (이력 리스트 대신 카운터만 둬 체크포인트 증식을 막는다). key = "{company_id}:{agent}"
     rework_count: Annotated[dict[str, int], merge_dict]
@@ -249,6 +258,11 @@ class GraphState(TypedDict):
 
     # 보고서 재작성 횟수 (종료 가드)
     quality_attempts: int
+
+
+# 결정 로그는 State 가 아니라 관측성 계층으로:
+# - agents/supervisor/audit.py 의 log_decision 이 {trace_id, node, decision, reason, ts} 를 JSON 한 줄로 외부(logger, outputs/logs/{trace_id}.jsonl)에 적재한다.
+# - 라우팅 사유, 재작업 판단 근거(부족한 항목)가 여기 남는다. LangSmith 에는 같은 trace_id 가 run metadata/tags 로 실린다.
 
 
 # =========================
